@@ -367,6 +367,30 @@ export function App() {
     }
   }, [])
 
+  const resetAudioTimeline = useCallback(
+    ({ resumeWhenEnded = true }: { resumeWhenEnded?: boolean } = {}) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setAudioProgress((previous) => ({
+          ...previous,
+          time: 0,
+          progress: 0,
+        }))
+        return
+      }
+
+      const previousState = audio.getState()
+      audio.setCurrentTime(0)
+
+      if (previousState === 'ended' && resumeWhenEnded) {
+        audio.play().catch((error) => {
+          console.error(error)
+        })
+      }
+    },
+    [audioSupported],
+  )
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -432,10 +456,18 @@ export function App() {
     resizeObserver.observe(canvas)
     window.addEventListener('resize', updateMetrics)
 
+    const handleRunRestart = () => {
+      resetAudioTimeline()
+    }
+
     const loop = createGameLoop({
       update: (dt) => {
         const snapshot = input.consumeActions()
-        world.update({ ...snapshot, dt })
+        world.update({
+          ...snapshot,
+          dt,
+          onRunRestart: handleRunRestart,
+        })
         updateHud()
       },
       render: (alpha) => {
@@ -455,7 +487,7 @@ export function App() {
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
     }
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -492,18 +524,20 @@ export function App() {
   const handleRestart = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     world.reset()
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleNewSeed = useCallback(() => {
     const world = worldRef.current
     if (!world) return
     const nextSeed = createSeed()
     seedRef.current = nextSeed
+    resetAudioTimeline()
     world.reset(nextSeed)
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleTogglePlayback = useCallback(() => {
     const audio = audioRef.current

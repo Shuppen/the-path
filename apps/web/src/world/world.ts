@@ -47,6 +47,7 @@ export interface WorldUpdateInput {
   jumpHoldDuration: number
   pointer?: Vector2
   dt: number
+  onRunRestart?: (event: { reason: 'manual' | 'gameover'; seed: string }) => void
 }
 
 export class World {
@@ -127,12 +128,14 @@ export class World {
     this.advanceFlashes(input.dt)
 
     if (input.restart) {
+      input.onRunRestart?.({ reason: 'manual', seed: this.baseSeed })
       this.reset(this.baseSeed)
       return
     }
 
     if (this.state.status === 'gameover') {
       if (input.jump) {
+        input.onRunRestart?.({ reason: 'gameover', seed: this.baseSeed })
         this.reset(this.baseSeed)
       }
       return
