@@ -6,7 +6,7 @@ describe('App', () => {
     render(<App />)
     expect(screen.getByRole('presentation')).toBeInTheDocument()
     expect(
-      screen.getByText('Calibrate the stage for immersive narratives')
+      screen.getByText('Calibrate the route through rhythm-synced obstacles')
     ).toBeInTheDocument()
   })
 })
