@@ -7,7 +7,7 @@ import {
   MIN_GROUND_HEIGHT,
   PLAYER_X,
 } from './constants'
-import { BeatLevelGenerator } from './beatLevelGenerator'
+import { BeatLevelGenerator, type BeatLevelGeneratorOptions } from './beatLevelGenerator'
 import { advanceObstacles, evaluateObstacles } from './obstacles'
 import { createInitialPlayer, updatePlayer } from './player'
 import type { FlashEffect, StageMetrics, WorldSnapshot, WorldState } from './types'
@@ -53,18 +53,37 @@ export class World {
   private baseSeed: string
   private prng: Prng
   private generator: BeatLevelGenerator
+  private generatorOptions: BeatLevelGeneratorOptions
+  private externalClock?: () => number | null
   private flashId = 0
 
   constructor(config: WorldConfig) {
     this.baseSeed = config.seed
     const stage = createStageMetrics(config.width, config.height)
     this.prng = createPrng(this.baseSeed)
-    this.generator = new BeatLevelGenerator(this.prng)
+    this.generatorOptions = {}
+    this.generator = new BeatLevelGenerator(this.prng, this.generatorOptions)
     this.state = createBaseState(this.baseSeed, stage)
   }
 
   setPointer(pointer?: Vector2): void {
     this.state.pointer = pointer ? cloneVector(pointer) : undefined
+  }
+
+  attachTimeSource(clock?: () => number | null): void {
+    this.externalClock = clock
+  }
+
+  syncToBeat(time: number, confidence = 1): void {
+    this.generator.syncToExternalBeat(time, confidence)
+  }
+
+  applyEnergySpike(intensity: number): void {
+    this.generator.applyEnergySpike(intensity)
+  }
+
+  applyBreak(duration: number): void {
+    this.generator.applyBreak(duration)
   }
 
   setViewport(width: number, height: number): void {
@@ -112,7 +131,14 @@ export class World {
       return
     }
 
-    this.state.time += input.dt
+    const externalTime = this.externalClock?.()
+    if (typeof externalTime === 'number' && Number.isFinite(externalTime)) {
+      if (externalTime >= 0) {
+        this.state.time = externalTime
+      }
+    } else {
+      this.state.time += input.dt
+    }
 
     const playerResult = updatePlayer(this.state.player, {
       jumpRequested: input.jump,
@@ -176,14 +202,17 @@ export class World {
     }
   }
 
-  reset(seed?: string): void {
+  reset(seed?: string, generatorOptions?: BeatLevelGeneratorOptions): void {
     if (seed) {
       this.baseSeed = seed
     }
     const stage = this.state.stage
     const pointer = this.state.pointer
     this.prng = createPrng(this.baseSeed)
-    this.generator = new BeatLevelGenerator(this.prng)
+    if (generatorOptions) {
+      this.generatorOptions = { ...this.generatorOptions, ...generatorOptions }
+    }
+    this.generator = new BeatLevelGenerator(this.prng, this.generatorOptions)
     this.generator.reset()
     this.flashId = 0
     this.state = createBaseState(this.baseSeed, stage)
