@@ -1,0 +1,11 @@
+node_modules
+.DS_Store
+coverage
+.vite
+.vscode
+*.log
+dist
+*.tsbuildinfo
+apps/web/node_modules
+apps/web/dist
+apps/web/coverage
