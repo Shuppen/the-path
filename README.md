@@ -51,6 +51,12 @@ The initial scene renders a responsive, pointer-reactive lighting effect:
 - Animation loop + viewport helpers come from `@the-path/utils`.
 - Shared type contracts live in `@the-path/types` for consistency.
 
+## Audio ingestion & analysis specification
+
+- The web app must accept locally provided audio via both `<input type="file">` selection and drag-and-drop, constrained to OGG, MP3, and WAV containers.
+- Uploaded files are handled as `File`/`Blob` objects; the audio analyser must derive its configuration (sample rate, channel count, duration windows, FFT sizing) from the decoded buffer instead of relying on manifest defaults.
+- Persistently hosted manifest entries remain supported, but locally uploaded tracks are wrapped in transient metadata that only exists for the active session.
+
 ## Mobile target platform
 
 While the MVP runs on desktop browsers, we actively target modern mobile hardware:
@@ -100,3 +106,5 @@ QA must capture these metrics on both Android (Chrome) and iOS (Safari); see `QA
 - Expand shared packages with domain types + math helpers.
 - Layer UI controls/tests over the Canvas scene.
 - Add CI workflows (Lint/Test) and deploy previews.
+- Extend `WebAudioAnalysis` to ingest `File`/`Blob` inputs, calibrate analyser nodes to each track's decoded characteristics, and expose decoding errors to the UI.
+- Provide a factory for temporary `AudioTrackManifestEntry` objects representing local uploads (generated IDs, empty `src`, derived metadata) so the existing playback UI can operate without hardcoded URLs.
