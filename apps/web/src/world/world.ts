@@ -43,6 +43,7 @@ export interface WorldConfig {
 export interface WorldUpdateInput {
   jump: boolean
   restart: boolean
+  jumpHoldDuration: number
   pointer?: Vector2
   dt: number
 }
@@ -142,6 +143,7 @@ export class World {
 
     const playerResult = updatePlayer(this.state.player, {
       jumpRequested: input.jump,
+      jumpHoldDuration: input.jumpHoldDuration,
       stage: this.state.stage,
       dt: input.dt,
     })
