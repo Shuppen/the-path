@@ -35,7 +35,7 @@ A pnpm-powered monorepo that hosts the **web MVP** for The Path alongside shared
    pnpm test        # Vitest in watch mode for the web app
    pnpm test:ci     # Vitest in CI mode with coverage report
    pnpm build       # Build all workspace packages and the web bundle
-   pnpm clean       # Remove build artefacts via package-level scripts
+   pnpm clean       # Remove build artefacts across packages and the web app
    ```
 
 4. **Format sources** with Prettier:
