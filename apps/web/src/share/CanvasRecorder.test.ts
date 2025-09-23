@@ -1,8 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import CanvasRecorder, { type RecorderState } from './CanvasRecorder'
 
-const originalMediaRecorder = globalThis.MediaRecorder
-const originalMediaStream = globalThis.MediaStream
+type MutableGlobal = typeof globalThis & {
+  MediaRecorder?: typeof MediaRecorder
+  MediaStream?: typeof MediaStream
+}
+
+const mutableGlobal = globalThis as MutableGlobal
+const originalMediaRecorder = mutableGlobal.MediaRecorder
+const originalMediaStream = mutableGlobal.MediaStream
 
 class FakeMediaStream {
   private readonly tracks: MediaStreamTrack[]
@@ -71,20 +77,20 @@ const createTrack = (kind: 'audio' | 'video'): MediaStreamTrack => ({
 describe('CanvasRecorder', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
-    ;(globalThis as any).MediaStream = FakeMediaStream as unknown as typeof MediaStream
-    ;(globalThis as any).MediaRecorder = FakeMediaRecorder as unknown as typeof MediaRecorder
+    mutableGlobal.MediaStream = FakeMediaStream as unknown as typeof MediaStream
+    mutableGlobal.MediaRecorder = FakeMediaRecorder as unknown as typeof MediaRecorder
   })
 
   afterEach(() => {
     if (originalMediaStream) {
-      ;(globalThis as any).MediaStream = originalMediaStream
+      mutableGlobal.MediaStream = originalMediaStream
     } else {
-      delete (globalThis as any).MediaStream
+      delete mutableGlobal.MediaStream
     }
     if (originalMediaRecorder) {
-      ;(globalThis as any).MediaRecorder = originalMediaRecorder
+      mutableGlobal.MediaRecorder = originalMediaRecorder
     } else {
-      delete (globalThis as any).MediaRecorder
+      delete mutableGlobal.MediaRecorder
     }
   })
 

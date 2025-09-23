@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ViewportMetrics } from '@the-path/types'
 import { getViewportMetrics, resizeCanvasToDisplaySize } from '@the-path/utils'
 
@@ -8,9 +8,20 @@ import { InputManager } from './engine/input'
 import { SceneRenderer } from './render/sceneRenderer'
 import { World, type WorldSnapshot } from './world'
 import { WebAudioAnalysis, type AudioPlaybackState, type ProgressEvent as AudioProgressEvent } from './audio/WebAudioAnalysis'
-import { DEFAULT_TRACK_ID, TRACK_MANIFEST } from './assets/tracks'
+import { DEFAULT_TRACK_ID, TRACK_MANIFEST, type AudioTrackManifestEntry } from './assets/tracks'
 import CanvasRecorder, { type RecorderState } from './share/CanvasRecorder'
-import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
+
+import TrackUpload from './ui/TrackUpload'
+import { validateAudioDuration } from './audio/uploadValidation'
+import {
+  type StoredRecentTrack,
+  MAX_RECENT_TRACKS,
+  readRecentTracks,
+  toManifest,
+  upsertRecentTrack,
+  writeRecentTracks,
+} from './audio/recentTracks'
+
 
 const padScore = (value: number): string => value.toString().padStart(6, '0')
 
@@ -46,6 +57,23 @@ const describeAudioState = (state: AudioPlaybackState): string => {
   }
 }
 
+const deriveTrackTitle = (fileName: string): string => {
+  const withoutExtension = fileName.replace(/\.[^/.]+$/, '')
+  const normalized = withoutExtension.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return 'Uploaded track'
+  }
+  return normalized
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+const describeUploadedTrack = (duration: number, bpm: number): string => {
+  const roundedBpm = Math.round(bpm)
+  return `User uploaded · ${formatTime(duration)} · ~${roundedBpm} BPM`
+}
+
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const metricsRef = useRef<ViewportMetrics | null>(null)
@@ -63,7 +91,15 @@ export function App() {
   const audioSupported = audioRef.current?.isSupported() ?? false
   const defaultTrack = TRACK_MANIFEST.find((track) => track.id === DEFAULT_TRACK_ID) ?? TRACK_MANIFEST[0]
   const [selectedTrackId, setSelectedTrackId] = useState<string>(defaultTrack?.id ?? DEFAULT_TRACK_ID)
-  const selectedTrack = TRACK_MANIFEST.find((track) => track.id === selectedTrackId) ?? defaultTrack
+  const [uploadedTracks, setUploadedTracks] = useState<AudioTrackManifestEntry[]>([])
+  const [recentTracks, setRecentTracks] = useState<StoredRecentTrack[]>(() => readRecentTracks())
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false)
+  const selectedTrack = useMemo(() => {
+    const uploaded = uploadedTracks.find((track) => track.id === selectedTrackId)
+    if (uploaded) return uploaded
+    return TRACK_MANIFEST.find((track) => track.id === selectedTrackId) ?? defaultTrack
+  }, [uploadedTracks, selectedTrackId, defaultTrack])
   const [audioState, setAudioState] = useState<AudioPlaybackState>(
     () => audioRef.current?.getState() ?? 'idle',
   )
@@ -88,6 +124,109 @@ export function App() {
     status: 'running',
     seed: seedRef.current,
   }))
+
+  useEffect(() => {
+    writeRecentTracks(recentTracks)
+  }, [recentTracks])
+
+  useEffect(() => {
+    const hasUploaded = uploadedTracks.some((track) => track.id === selectedTrackId)
+    const hasBuiltIn = TRACK_MANIFEST.some((track) => track.id === selectedTrackId)
+    if (!hasUploaded && !hasBuiltIn && selectedTrack) {
+      setSelectedTrackId(selectedTrack.id)
+    }
+  }, [selectedTrackId, uploadedTracks, selectedTrack])
+
+  const handleUploadFile = useCallback(
+    async (file: File) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setUploadError('Web Audio API недоступна в этом браузере.')
+        return
+      }
+
+      setIsProcessingUpload(true)
+      setUploadError(null)
+
+      try {
+        const { id, duration, bpm } = await audio.importFromBlob(file)
+        const durationError = validateAudioDuration(duration)
+        if (durationError) {
+          audio.removeCustomTrack(id)
+          setUploadError(durationError)
+          return
+        }
+
+        const manifest: AudioTrackManifestEntry = {
+          id,
+          title: deriveTrackTitle(file.name),
+          artist: 'Local upload',
+          duration,
+          bpm: Math.round(bpm),
+          description: describeUploadedTrack(duration, bpm),
+        }
+
+        setUploadedTracks((previous) => {
+          const retained = previous.filter(
+            (track) => track.id !== manifest.id && audio.hasCustomTrack(track.id),
+          )
+          return [manifest, ...retained].slice(0, MAX_RECENT_TRACKS)
+        })
+
+        const storedEntry: StoredRecentTrack = {
+          id: manifest.id,
+          title: manifest.title,
+          artist: manifest.artist,
+          duration: manifest.duration,
+          bpm: manifest.bpm,
+          createdAt: Date.now(),
+        }
+        setRecentTracks((previous) => upsertRecentTrack(previous, storedEntry, MAX_RECENT_TRACKS))
+        setSelectedTrackId(manifest.id)
+        setUploadError(null)
+      } catch (error) {
+        if (error instanceof Error) {
+          setUploadError(error.message)
+        } else {
+          setUploadError('Не удалось загрузить трек.')
+        }
+      } finally {
+        setIsProcessingUpload(false)
+      }
+    },
+    [audioSupported],
+  )
+
+  const handleSelectRecentTrack = useCallback(
+    (entry: StoredRecentTrack) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setUploadError('Web Audio API недоступна в этом браузере.')
+        return
+      }
+
+      if (!audio.hasCustomTrack(entry.id)) {
+        setUploadError('Файл недоступен. Загрузите трек повторно.')
+        return
+      }
+
+      setUploadedTracks((previous) => {
+        if (previous.some((track) => track.id === entry.id)) {
+          return previous.filter((track) => audio.hasCustomTrack(track.id))
+        }
+        const manifest = {
+          ...toManifest(entry),
+          description: describeUploadedTrack(entry.duration, entry.bpm),
+        }
+        const retained = previous.filter((track) => audio.hasCustomTrack(track.id))
+        return [manifest, ...retained].slice(0, MAX_RECENT_TRACKS)
+      })
+
+      setUploadError(null)
+      setSelectedTrackId(entry.id)
+    },
+    [audioSupported],
+  )
 
   const pushHud = useCallback((world: World) => {
     const snapshot = world.snapshot()
@@ -358,6 +497,7 @@ export function App() {
   }, [selectedTrack])
 
   const handleSelectTrack = useCallback((trackId: string) => {
+    setUploadError(null)
     setSelectedTrackId(trackId)
   }, [])
 
@@ -490,6 +630,26 @@ export function App() {
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
+            {uploadedTracks.map((track) => {
+              const isSelected = track.id === selectedTrackId
+              return (
+                <button
+                  key={`uploaded-${track.id}`}
+                  type="button"
+                  onClick={() => handleSelectTrack(track.id)}
+                  className={
+                    'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ' +
+                    (isSelected
+                      ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/60'
+                      : 'bg-slate-800/70 text-slate-300 hover:bg-slate-700/70')
+                  }
+                >
+                  <span className="font-medium">{track.title}</span>
+                  <span className="text-xs text-emerald-200/80">Локальный</span>
+                  <span className="text-xs text-slate-400">{formatTime(track.duration)}</span>
+                </button>
+              )
+            })}
             {TRACK_MANIFEST.map((track) => {
               const isSelected = track.id === selectedTrackId
               return (
@@ -509,6 +669,50 @@ export function App() {
                 </button>
               )
             })}
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <TrackUpload
+              onFileAccepted={handleUploadFile}
+              disabled={!audioSupported}
+              processing={isProcessingUpload}
+              error={uploadError}
+              onClearError={() => setUploadError(null)}
+            />
+            {recentTracks.length > 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm shadow-lg shadow-slate-900/30">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Последние треки</p>
+                  <span className="text-[0.65rem] text-slate-500">Сессия хранит до {MAX_RECENT_TRACKS} записей</span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {recentTracks.map((entry) => {
+                    const available = audioRef.current?.hasCustomTrack(entry.id) ?? false
+                    return (
+                      <button
+                        key={`recent-${entry.id}`}
+                        type="button"
+                        onClick={() => handleSelectRecentTrack(entry)}
+                        className="flex w-full items-center justify-between rounded-xl border border-slate-200/20 bg-slate-800/60 px-3 py-2 text-left transition hover:bg-slate-700/60"
+                      >
+                        <span className="flex flex-col text-xs">
+                          <span className="font-semibold text-slate-200">{entry.title}</span>
+                          <span className="text-slate-400">{formatTime(entry.duration)} · ~{Math.round(entry.bpm)} BPM</span>
+                        </span>
+                        <span
+                          className={
+                            'text-[0.65rem] font-medium ' +
+                            (available ? 'text-emerald-300' : 'text-amber-300')
+                          }
+                        >
+                          {available ? 'Доступно' : 'Нет в памяти'}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
 

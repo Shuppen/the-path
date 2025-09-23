@@ -108,6 +108,9 @@ export class WebAudioAnalysis {
   private readonly progressListeners = new Set<Listener<ProgressEvent>>()
   private readonly stateListeners = new Set<Listener<AudioPlaybackState>>()
   private readonly externalOutputs = new Set<AudioNode>()
+  private readonly customBuffers = new Map<string, AudioBuffer>()
+  private readonly customBufferOrder: string[] = []
+  private readonly maxCustomBuffers = 6
 
   constructor(options: Partial<WebAudioAnalysisOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options }
@@ -195,6 +198,43 @@ export class WebAudioAnalysis {
     return 0
   }
 
+  hasCustomTrack(id: string): boolean {
+    return this.customBuffers.has(id)
+  }
+
+  removeCustomTrack(id: string): void {
+    this.customBuffers.delete(id)
+    const index = this.customBufferOrder.indexOf(id)
+    if (index !== -1) {
+      this.customBufferOrder.splice(index, 1)
+    }
+  }
+
+  async importFromBlob(
+    blob: Blob,
+    options: { id?: string } = {},
+  ): Promise<{ id: string; duration: number; sampleRate: number; bpm: number }> {
+    if (!this.supported) {
+      throw new Error('Web Audio API is not available in this environment')
+    }
+
+    const ctx = this.getOrCreateContext()
+    const id = options.id ?? this.generateUploadId()
+    const arrayBuffer = await blob.arrayBuffer()
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+
+    this.registerCustomBuffer(id, audioBuffer)
+
+    const bpm = this.estimateTempo(audioBuffer)
+
+    return {
+      id,
+      duration: audioBuffer.duration,
+      sampleRate: audioBuffer.sampleRate,
+      bpm,
+    }
+  }
+
   async load(track: AudioTrackManifestEntry): Promise<void> {
     this.track = track
     this.loadToken += 1
@@ -215,19 +255,32 @@ export class WebAudioAnalysis {
     this.updatePlaybackState('loading')
 
     try {
-      const response = await fetch(track.src)
-      if (!response.ok) {
-        throw new Error(`Failed to fetch audio: ${response.status}`)
+      let audioBuffer: AudioBuffer | null = null
+      if (track.src) {
+        const response = await fetch(track.src)
+        if (!response.ok) {
+          throw new Error(`Failed to fetch audio: ${response.status}`)
+        }
+        const arrayBuffer = await response.arrayBuffer()
+        if (token !== this.loadToken) return
+        audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+      } else if (track.id) {
+        audioBuffer = this.customBuffers.get(track.id) ?? null
+        if (!audioBuffer) {
+          throw new Error(`No registered buffer for track ${track.id}`)
+        }
       }
-      const arrayBuffer = await response.arrayBuffer()
+
       if (token !== this.loadToken) return
 
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
-      if (token !== this.loadToken) return
+      if (!audioBuffer) {
+        throw new Error('Unable to resolve audio buffer for track')
+      }
 
       this.buffer = audioBuffer
-      this.prepareGraph()
-      this.updateFrequencyBands()
+      const bpm = Number.isFinite(track.bpm) && track.bpm > 0 ? track.bpm : this.estimateTempo(audioBuffer)
+      this.track = { ...track, bpm }
+      this.configureForBuffer(audioBuffer, bpm)
       this.startOffset = 0
       this.startedAt = ctx.currentTime
       this.resetAnalysisState()
@@ -293,6 +346,8 @@ export class WebAudioAnalysis {
     this.buffer = null
     this.track = null
     this.frequencyData = null
+    this.customBuffers.clear()
+    this.customBufferOrder.length = 0
     this.audioContext?.close().catch(() => {
       /* noop */
     })
@@ -355,6 +410,39 @@ export class WebAudioAnalysis {
       }
       this.analyser.connect(this.gainNode)
     }
+  }
+
+  private configureForBuffer(buffer: AudioBuffer, bpmHint?: number): void {
+    if (!this.supported) return
+    const sampleRate = buffer.sampleRate || 44100
+    const targetWindow = clamp(Math.round(sampleRate * 0.05), 256, 32768)
+    this.options.fftSize = this.computeFftSize(targetWindow)
+    this.prepareGraph()
+
+    if (this.analyser) {
+      this.analyser.fftSize = this.options.fftSize
+      this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount)
+    }
+
+    const windowSeconds = this.options.fftSize / sampleRate
+    const bpm = Number.isFinite(bpmHint) && bpmHint ? bpmHint : this.estimateTempo(buffer)
+    const beatInterval = clamp(60 / clamp(bpm, 60, 180), 0.25, 1.5)
+
+    this.options.minBeatInterval = clamp(beatInterval * 0.6, 0.18, 0.8)
+    this.options.minEnergyInterval = clamp(beatInterval * 0.85, 0.25, 2.5)
+    this.options.breakHoldTime = clamp(windowSeconds * 6, 0.35, 2.4)
+    this.options.minBreakInterval = clamp(beatInterval * 2.2, 1, 5.5)
+    this.options.historySize = Math.max(32, Math.round(6 / Math.max(windowSeconds, 0.02)))
+
+    this.updateFrequencyBands()
+  }
+
+  private computeFftSize(target: number): number {
+    let size = 256
+    while (size < target) {
+      size *= 2
+    }
+    return clamp(size, 512, 32768)
   }
 
   private updateFrequencyBands(): void {
@@ -568,6 +656,103 @@ export class WebAudioAnalysis {
         // ignore connection errors
       }
     }
+  }
+
+  private registerCustomBuffer(id: string, buffer: AudioBuffer): void {
+    this.customBuffers.set(id, buffer)
+    const existingIndex = this.customBufferOrder.indexOf(id)
+    if (existingIndex !== -1) {
+      this.customBufferOrder.splice(existingIndex, 1)
+    }
+    this.customBufferOrder.push(id)
+    while (this.customBufferOrder.length > this.maxCustomBuffers) {
+      const oldest = this.customBufferOrder.shift()
+      if (oldest) {
+        this.customBuffers.delete(oldest)
+      }
+    }
+  }
+
+  private estimateTempo(buffer: AudioBuffer): number {
+    const sampleRate = buffer.sampleRate || 44100
+    const frameCount = buffer.length
+    const channelCount = Math.max(1, buffer.numberOfChannels)
+    const windowSize = clamp(Math.floor(sampleRate * 0.05), 1024, 8192)
+
+    const channels: Float32Array[] = []
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      channels.push(buffer.getChannelData(channel))
+    }
+
+    const energies: number[] = []
+    for (let offset = 0; offset < frameCount; offset += windowSize) {
+      const end = Math.min(frameCount, offset + windowSize)
+      const length = Math.max(1, end - offset)
+      let total = 0
+      for (const channel of channels) {
+        for (let i = offset; i < end; i += 1) {
+          const sample = channel[i]
+          total += sample * sample
+        }
+      }
+      energies.push(total / (length * channelCount))
+    }
+
+    if (energies.length < 2) {
+      return 110
+    }
+
+    const averageEnergy = energies.reduce((acc, value) => acc + value, 0) / energies.length
+    if (averageEnergy <= 0) {
+      return 110
+    }
+
+    const threshold = averageEnergy * 1.35
+    const peakTimes: number[] = []
+    for (let i = 1; i < energies.length - 1; i += 1) {
+      const energy = energies[i]
+      if (energy <= threshold) continue
+      if (energy <= energies[i - 1] || energy < energies[i + 1]) continue
+      peakTimes.push((i * windowSize) / sampleRate)
+    }
+
+    if (peakTimes.length < 2) {
+      return 110
+    }
+
+    const counts = new Map<number, number>()
+    for (let i = 1; i < peakTimes.length; i += 1) {
+      const interval = peakTimes[i] - peakTimes[i - 1]
+      if (!Number.isFinite(interval) || interval <= 0.2 || interval >= 2.5) {
+        continue
+      }
+      let bpm = 60 / interval
+      while (bpm < 60) bpm *= 2
+      while (bpm > 190) bpm /= 2
+      const rounded = Math.round(bpm)
+      counts.set(rounded, (counts.get(rounded) ?? 0) + 1)
+    }
+
+    if (counts.size === 0) {
+      return 110
+    }
+
+    let bestBpm = 110
+    let bestScore = -Infinity
+    for (const [bpm, score] of counts) {
+      if (score > bestScore) {
+        bestScore = score
+        bestBpm = bpm
+      } else if (score === bestScore && Math.abs(bpm - 110) < Math.abs(bestBpm - 110)) {
+        bestBpm = bpm
+      }
+    }
+
+    return clamp(bestBpm, 60, 180)
+  }
+
+  private generateUploadId(): string {
+    return `upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   }
 
   private getOrCreateContext(): AudioContext {
