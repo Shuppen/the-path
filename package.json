@@ -1,0 +1,28 @@
+{
+  "name": "the-path",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @the-path/web dev",
+    "build": "pnpm run build:packages && pnpm run build:web",
+    "build:packages": "pnpm --filter @the-path/types run build && pnpm --filter @the-path/utils run build",
+    "build:web": "pnpm --filter @the-path/web run build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "pnpm --filter @the-path/web test",
+    "test:ci": "pnpm --filter @the-path/web test:ci",
+    "clean": "pnpm --filter @the-path/types run clean && pnpm --filter @the-path/utils run clean"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.36.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.4.0",
+    "prettier": "^3.5.1",
+    "typescript-eslint": "^8.44.0"
+  },
+  "packageManager": "pnpm@10.5.2"
+}
