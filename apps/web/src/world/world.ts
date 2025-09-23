@@ -11,6 +11,7 @@ import { BeatLevelGenerator, type BeatLevelGeneratorOptions } from './beatLevelG
 import { advanceObstacles, evaluateObstacles } from './obstacles'
 import { createInitialPlayer, updatePlayer } from './player'
 import type { FlashEffect, StageMetrics, WorldSnapshot, WorldState } from './types'
+import { readPersonalBest, updatePersonalBest, type PersonalBestRecord } from './personalBest'
 
 const createStageMetrics = (width: number, height: number): StageMetrics => {
   const groundHeight = Math.max(height * GROUND_HEIGHT_RATIO, MIN_GROUND_HEIGHT)
@@ -57,6 +58,8 @@ export class World {
   private generatorOptions: BeatLevelGeneratorOptions
   private externalClock?: () => number | null
   private flashId = 0
+  private sessionBestScore = 0
+  private personalBest: PersonalBestRecord
 
   constructor(config: WorldConfig) {
     this.baseSeed = config.seed
@@ -65,6 +68,7 @@ export class World {
     this.generatorOptions = {}
     this.generator = new BeatLevelGenerator(this.prng, this.generatorOptions)
     this.state = createBaseState(this.baseSeed, stage)
+    this.personalBest = readPersonalBest()
   }
 
   setPointer(pointer?: Vector2): void {
@@ -113,6 +117,8 @@ export class World {
       bestCombo: this.state.bestCombo,
       status: this.state.status,
       seed: this.state.seed,
+      sessionBestScore: this.sessionBestScore,
+      personalBestScore: this.personalBest.score,
     }
   }
 
@@ -201,6 +207,7 @@ export class World {
         life: FLASH_LONG_LIFETIME,
         strength: 1,
       })
+      this.finalizeRun()
     }
   }
 
@@ -235,5 +242,19 @@ export class World {
     this.state.flashes = this.state.flashes
       .map((flash) => ({ ...flash, age: flash.age + dt }))
       .filter((flash) => flash.age < flash.life)
+  }
+
+  private updateSessionBest(score: number): void {
+    if (Number.isFinite(score) && score > this.sessionBestScore) {
+      this.sessionBestScore = score
+    }
+  }
+
+  private finalizeRun(): void {
+    const finalScore = Math.max(0, Math.floor(this.state.score))
+    this.updateSessionBest(finalScore)
+    if (finalScore > this.personalBest.score) {
+      this.personalBest = updatePersonalBest(finalScore)
+    }
   }
 }
