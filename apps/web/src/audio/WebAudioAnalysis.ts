@@ -107,6 +107,7 @@ export class WebAudioAnalysis {
   private readonly breakListeners = new Set<Listener<BreakEvent>>()
   private readonly progressListeners = new Set<Listener<ProgressEvent>>()
   private readonly stateListeners = new Set<Listener<AudioPlaybackState>>()
+  private readonly externalOutputs = new Set<AudioNode>()
 
   constructor(options: Partial<WebAudioAnalysisOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options }
@@ -145,6 +146,27 @@ export class WebAudioAnalysis {
     this.stateListeners.add(listener)
     return () => {
       this.stateListeners.delete(listener)
+    }
+  }
+
+  createRecordingStream(): { stream: MediaStream; disconnect: () => void } | null {
+    if (!this.supported) return null
+    const context = this.getOrCreateContext()
+    this.prepareGraph()
+    const destination = context.createMediaStreamDestination()
+    this.externalOutputs.add(destination)
+    this.refreshOutputConnections()
+    return {
+      stream: destination.stream,
+      disconnect: () => {
+        this.externalOutputs.delete(destination)
+        this.refreshOutputConnections()
+        try {
+          destination.disconnect()
+        } catch {
+          // ignore disconnect errors
+        }
+      },
     }
   }
 
@@ -323,8 +345,8 @@ export class WebAudioAnalysis {
     if (!this.gainNode) {
       this.gainNode = this.audioContext.createGain()
       this.gainNode.gain.value = 1
-      this.gainNode.connect(this.audioContext.destination)
     }
+    this.refreshOutputConnections()
     if (this.analyser && this.gainNode) {
       try {
         this.analyser.disconnect()
@@ -529,6 +551,23 @@ export class WebAudioAnalysis {
     }
     source.disconnect()
     this.stopAnalysisLoop()
+  }
+
+  private refreshOutputConnections(): void {
+    if (!this.supported || !this.audioContext || !this.gainNode) return
+    try {
+      this.gainNode.disconnect()
+    } catch {
+      // ignore disconnect errors
+    }
+    this.gainNode.connect(this.audioContext.destination)
+    for (const output of this.externalOutputs) {
+      try {
+        this.gainNode.connect(output)
+      } catch {
+        // ignore connection errors
+      }
+    }
   }
 
   private getOrCreateContext(): AudioContext {
