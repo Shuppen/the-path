@@ -12,7 +12,7 @@
     "format": "prettier --write .",
     "test": "pnpm --filter @the-path/web test",
     "test:ci": "pnpm --filter @the-path/web test:ci",
-    "clean": "pnpm --filter @the-path/types run clean && pnpm --filter @the-path/utils run clean"
+    "clean": "pnpm --filter @the-path/types run clean && pnpm --filter @the-path/utils run clean && pnpm --filter @the-path/web run clean"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
