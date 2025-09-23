@@ -293,6 +293,23 @@ export function App() {
     })
   }, [])
 
+  const resetAudioTimeline = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio || !audio.isSupported()) return
+    const state = audio.getState()
+    if (state === 'idle' || state === 'loading') {
+      audio.setCurrentTime(0)
+      return
+    }
+    const shouldResume = state === 'playing'
+    audio.stop()
+    if (shouldResume) {
+      audio.play().catch((error) => {
+        console.error(error)
+      })
+    }
+  }, [])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -436,6 +453,9 @@ export function App() {
       update: (dt) => {
         const snapshot = input.consumeActions()
         world.update({ ...snapshot, dt })
+        if (world.consumePendingReset()) {
+          resetAudioTimeline()
+        }
         updateHud()
       },
       render: (alpha) => {
@@ -455,7 +475,7 @@ export function App() {
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
     }
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -492,18 +512,20 @@ export function App() {
   const handleRestart = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     world.reset()
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleNewSeed = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     const nextSeed = createSeed()
     seedRef.current = nextSeed
     world.reset(nextSeed)
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleTogglePlayback = useCallback(() => {
     const audio = audioRef.current
