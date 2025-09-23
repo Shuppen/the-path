@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WebAudioAnalysis } from './WebAudioAnalysis'
 import { World } from '../world'
+import { DEFAULT_TRACK_ID, getTrackById } from '../assets/tracks'
 
 const createWorld = () => new World({ seed: 'test', width: 800, height: 600 })
+
+const FALLBACK_TRACK = {
+  id: 'fixture-track',
+  title: 'Fixture Track',
+  artist: 'Test Harness',
+  duration: 4,
+  bpm: 120,
+  src: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=',
+}
 
 describe('WebAudioAnalysis integration', () => {
   it('keeps beat listeners active for uploaded tracks', async () => {
@@ -14,13 +24,12 @@ describe('WebAudioAnalysis integration', () => {
       world.syncToBeat(time, confidence)
     })
 
+    const builtinTrack = getTrackById(DEFAULT_TRACK_ID) ?? FALLBACK_TRACK
+    expect(builtinTrack).toBeDefined()
+
     await analysis.load({
-      id: 'builtin',
-      title: 'Built in',
-      artist: 'System',
-      src: 'data:audio/wav;base64,',
-      duration: 8,
-      bpm: 110,
+      ...builtinTrack,
+      id: 'builtin-test',
     })
 
     ;(analysis as unknown as { emitBeat: (event: { time: number; confidence: number }) => void }).emitBeat({
