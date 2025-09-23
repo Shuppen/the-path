@@ -10,6 +10,7 @@ import { World, type WorldSnapshot } from './world'
 import { WebAudioAnalysis, type AudioPlaybackState, type ProgressEvent as AudioProgressEvent } from './audio/WebAudioAnalysis'
 import { DEFAULT_TRACK_ID, TRACK_MANIFEST } from './assets/tracks'
 import CanvasRecorder, { type RecorderState } from './share/CanvasRecorder'
+import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 
 const padScore = (value: number): string => value.toString().padStart(6, '0')
 
@@ -52,6 +53,8 @@ export function App() {
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
   const recorderRef = useRef<CanvasRecorder | null>(null)
+
+  const prefersReducedMotion = usePrefersReducedMotion()
 
   if (typeof window !== 'undefined' && audioRef.current === null) {
     audioRef.current = new WebAudioAnalysis()
@@ -256,6 +259,7 @@ export function App() {
 
     return () => {
       loop.stop()
+      renderer.dispose()
       input.unbind()
       resizeObserver.disconnect()
       window.removeEventListener('resize', updateMetrics)
@@ -471,8 +475,12 @@ export function App() {
           <div className="mt-5 space-y-3">
             <div className="relative h-2 overflow-hidden rounded-full bg-slate-800/60">
               <div
+                data-testid="audio-progress-fill"
                 className="absolute inset-y-0 left-0 bg-cyan-400/80 transition-all"
-                style={{ width: `${Math.round(clamp01(audioProgress.progress) * 100)}%` }}
+                style={{
+                  width: `${Math.round(clamp01(audioProgress.progress) * 100)}%`,
+                  transition: prefersReducedMotion ? 'none' : undefined,
+                }}
               />
             </div>
             <div className="flex items-center justify-between text-xs text-slate-400 sm:text-sm">
@@ -575,8 +583,12 @@ export function App() {
                 <div className="space-y-1">
                   <div className="relative h-1.5 overflow-hidden rounded-full bg-slate-800/60">
                     <div
+                      data-testid="recorder-progress-fill"
                       className="absolute inset-y-0 left-0 bg-cyan-400/80 transition-all"
-                      style={{ width: `${Math.round(bufferRatio * 100)}%` }}
+                      style={{
+                        width: `${Math.round(bufferRatio * 100)}%`,
+                        transition: prefersReducedMotion ? 'none' : undefined,
+                      }}
                     />
                   </div>
                   <div className="flex items-center justify-between text-[0.7rem] text-slate-400">
@@ -609,7 +621,7 @@ export function App() {
             </div>
 
             <div className="pointer-events-auto flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:text-sm">
-              <p>
+              <p style={prefersReducedMotion ? { animation: 'none', transform: 'none' } : undefined}>
                 {hud.status === 'gameover'
                   ? 'Signal lost · tap or press Space/R to restart'
                   : !audioSupported
