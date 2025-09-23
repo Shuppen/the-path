@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "paths": {
+      "@the-path/types": ["packages/types/src"],
+      "@the-path/utils": ["packages/utils/src"],
+      "@the-path/utils/*": ["packages/utils/src/*"],
+      "@the-path/types/*": ["packages/types/src/*"]
+    }
+  },
+  "include": []
+}
