@@ -55,4 +55,44 @@ describe('WebAudioAnalysis integration', () => {
     syncSpy.mockRestore()
     analysis.destroy()
   })
+
+  it('retains listeners after repeated stop and play cycles', async () => {
+    const analysis = new WebAudioAnalysis()
+    const beatSpy = vi.fn()
+    const progressSpy = vi.fn()
+
+    const detachBeat = analysis.onBeat(beatSpy)
+    const detachProgress = analysis.onProgress(progressSpy)
+
+    const builtinTrack = getTrackById(DEFAULT_TRACK_ID) ?? FALLBACK_TRACK
+    expect(builtinTrack).toBeDefined()
+
+    await analysis.load({
+      ...builtinTrack,
+      id: 'cycle-test',
+    })
+
+    ;(analysis as unknown as {
+      emitBeat: (event: { time: number; confidence: number }) => void
+    }).emitBeat({ time: 0.25, confidence: 1 })
+    expect(beatSpy).toHaveBeenCalledTimes(1)
+
+    const initialProgressEvents = progressSpy.mock.calls.length
+
+    await analysis.play()
+    analysis.stop()
+    await analysis.play()
+    analysis.stop()
+
+    ;(analysis as unknown as {
+      emitBeat: (event: { time: number; confidence: number }) => void
+    }).emitBeat({ time: 0.5, confidence: 0.9 })
+
+    expect(beatSpy).toHaveBeenCalledTimes(2)
+    expect(progressSpy.mock.calls.length).toBeGreaterThan(initialProgressEvents)
+
+    detachBeat()
+    detachProgress()
+    analysis.destroy()
+  })
 })

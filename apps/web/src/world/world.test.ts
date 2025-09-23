@@ -70,3 +70,53 @@ describe('World personal best tracking', () => {
     expect(snapshot.sessionBestScore).toBe(0)
   })
 })
+
+describe('World auto restart behaviour', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    advanceObstaclesMock.mockReset()
+    evaluateObstaclesMock.mockReset()
+  })
+
+  it('clears obstacles when restarting after a late crash', () => {
+    advanceObstaclesMock.mockImplementation((obstacles) => obstacles)
+    let crashTriggered = false
+    const targetTime = 33
+    const dt = 1 / 60
+    const steps = Math.ceil(targetTime * 60)
+    let iterations = 0
+    evaluateObstaclesMock.mockImplementation((state) => {
+      iterations += 1
+      if (!crashTriggered && (state.time >= targetTime || iterations >= steps)) {
+        crashTriggered = true
+        return { ...baseObstacleResult(), crashed: true }
+      }
+      return baseObstacleResult()
+    })
+
+    const world = new World({ seed: 'long-run', width: 800, height: 600 })
+    let simulatedTime = 0
+    world.attachTimeSource(() => simulatedTime)
+
+    for (let i = 0; i < steps; i += 1) {
+      simulatedTime += dt
+      world.update({ dt, jump: false, restart: false, jumpHoldDuration: 0 })
+    }
+
+    expect(crashTriggered).toBe(true)
+    expect(world.state.status).toBe('gameover')
+    expect(world.state.obstacles.length).toBeGreaterThan(0)
+
+    world.update({ dt, jump: true, restart: false, jumpHoldDuration: 0 })
+    const pendingReset = world.consumePendingReset()
+    expect(pendingReset).toBe(true)
+
+    simulatedTime = 0
+    simulatedTime += dt
+    world.update({ dt, jump: false, restart: false, jumpHoldDuration: 0 })
+
+    expect(world.state.status).toBe('running')
+    expect(world.state.time).toBeCloseTo(simulatedTime, 3)
+    expect(world.state.obstacles.length).toBe(0)
+  })
+})
