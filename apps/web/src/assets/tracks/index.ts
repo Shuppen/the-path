@@ -4,7 +4,7 @@ export interface AudioTrackManifestEntry {
   id: string
   title: string
   artist: string
-  src: string
+  src?: string
   duration: number
   bpm: number
   description?: string
