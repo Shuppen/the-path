@@ -63,4 +63,6 @@ export interface WorldSnapshot {
   bestCombo: number
   status: WorldStatus
   seed: string
+  sessionBestScore: number
+  personalBestScore: number
 }

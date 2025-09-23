@@ -13,6 +13,7 @@ import CanvasRecorder, { type RecorderState } from './share/CanvasRecorder'
 
 import BottomSheet from './ui/BottomSheet'
 import TrackUpload from './ui/TrackUpload'
+import { LeadersBoard } from './ui/LeadersBoard'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 import useMediaQuery from './hooks/useMediaQuery'
 import { validateAudioDuration } from './audio/uploadValidation'
@@ -24,9 +25,7 @@ import {
   upsertRecentTrack,
   writeRecentTracks,
 } from './audio/recentTracks'
-
-
-const padScore = (value: number): string => value.toString().padStart(6, '0')
+import { padScore } from './ui/scoreFormatting'
 
 const clamp01 = (value: number): number => {
   if (Number.isNaN(value)) return 0
@@ -160,6 +159,8 @@ export function App() {
     bestCombo: 0,
     status: 'running',
     seed: seedRef.current,
+    sessionBestScore: 0,
+    personalBestScore: 0,
   }))
 
   const isDesktop = useMediaQuery('(min-width: 768px)')
@@ -282,7 +283,9 @@ export function App() {
         previous.combo === snapshot.combo &&
         previous.bestCombo === snapshot.bestCombo &&
         previous.status === snapshot.status &&
-        previous.seed === snapshot.seed
+        previous.seed === snapshot.seed &&
+        previous.sessionBestScore === snapshot.sessionBestScore &&
+        previous.personalBestScore === snapshot.personalBestScore
       ) {
         return previous
       }
@@ -638,7 +641,7 @@ export function App() {
     {
       key: 'score',
       label: 'Score',
-      value: padScore(Math.floor(hud.score)),
+      value: padScore(hud.score),
       description: 'Current run total',
     },
     {
@@ -658,6 +661,18 @@ export function App() {
       label: 'Seed',
       value: hud.seed,
       description: 'Procedural key',
+    },
+    {
+      key: 'session-best-score',
+      label: 'Session best',
+      value: padScore(hud.sessionBestScore),
+      description: 'Highest score this session',
+    },
+    {
+      key: 'personal-best-score',
+      label: 'Personal best',
+      value: padScore(hud.personalBestScore),
+      description: 'Stored local record',
     },
   ] as const
 
@@ -824,7 +839,7 @@ export function App() {
       <div className="grid grid-cols-3 gap-3 pt-2 text-sm text-slate-300 sm:text-base">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Score</p>
-          <p className="font-mono text-2xl font-semibold text-slate-50 tabular-nums">{padScore(Math.floor(hud.score))}</p>
+          <p className="font-mono text-2xl font-semibold text-slate-50 tabular-nums">{padScore(hud.score)}</p>
         </div>
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Combo</p>
@@ -836,6 +851,14 @@ export function App() {
         </div>
       </div>
     </div>
+  )
+
+  const renderLeadersCard = (className?: string) => (
+    <LeadersBoard
+      sessionBest={hud.sessionBestScore}
+      personalBest={hud.personalBestScore}
+      className={className}
+    />
   )
 
   const renderRecorderCard = (className?: string) => (
@@ -930,6 +953,7 @@ export function App() {
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
         <div className="flex flex-wrap items-start justify-between gap-4">
           {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
+          {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
           {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
           {renderRunActions('pointer-events-auto')}
         </div>
@@ -1061,6 +1085,7 @@ export function App() {
           >
             <div className="space-y-6">
               {renderScoreboardCard()}
+              {renderLeadersCard()}
               {renderRecorderCard()}
               {renderRunActions()}
               <StatusMarquee
