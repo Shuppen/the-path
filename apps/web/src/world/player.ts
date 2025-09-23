@@ -4,6 +4,8 @@ import {
   PLAYER_GRAVITY,
   PLAYER_HEIGHT,
   PLAYER_JUMP_BUFFER,
+  PLAYER_JUMP_HOLD_GRAVITY_SCALE,
+  PLAYER_JUMP_HOLD_MAX_DURATION,
   PLAYER_JUMP_VELOCITY,
   PLAYER_MAX_FALL_SPEED,
   PLAYER_WIDTH,
@@ -13,6 +15,7 @@ import type { PlayerState, StageMetrics } from './types'
 
 export interface PlayerUpdateInput {
   jumpRequested: boolean
+  jumpHoldDuration: number
   stage: StageMetrics
   dt: number
 }
@@ -50,7 +53,7 @@ export const updatePlayer = (
   player: PlayerState,
   input: PlayerUpdateInput
 ): PlayerUpdateResult => {
-  const { jumpRequested, stage, dt } = input
+  const { jumpRequested, jumpHoldDuration, stage, dt } = input
   let jumped = false
   let landed = false
 
@@ -74,8 +77,15 @@ export const updatePlayer = (
     jumped = true
   }
 
+  const holdActive =
+    jumpHoldDuration > 0 &&
+    jumpHoldDuration <= PLAYER_JUMP_HOLD_MAX_DURATION &&
+    player.velocity.y < 0
+
+  const gravityMultiplier = holdActive ? PLAYER_JUMP_HOLD_GRAVITY_SCALE : 1
+
   player.velocity.y = clamp(
-    player.velocity.y + PLAYER_GRAVITY * dt,
+    player.velocity.y + PLAYER_GRAVITY * gravityMultiplier * dt,
     PLAYER_JUMP_VELOCITY,
     PLAYER_MAX_FALL_SPEED
   )

@@ -6,6 +6,8 @@ export const PLAYER_GRAVITY = 2400
 export const PLAYER_MAX_FALL_SPEED = 1800
 export const PLAYER_COYOTE_TIME = 0.12
 export const PLAYER_JUMP_BUFFER = 0.12
+export const PLAYER_JUMP_HOLD_MAX_DURATION = 0.18
+export const PLAYER_JUMP_HOLD_GRAVITY_SCALE = 0.6
 
 export const SCROLL_SPEED = 280
 export const INITIAL_BEAT_OFFSET = 0.6
