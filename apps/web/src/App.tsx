@@ -949,7 +949,12 @@ export function App() {
 
   const canvasSection = (
     <section className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10">
-      <canvas ref={canvasRef} className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]" role="presentation" />
+      <canvas
+        ref={canvasRef}
+        className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]"
+        style={{ touchAction: 'none' }}
+        aria-label="Gameplay canvas. Use touch gestures to guide the runner."
+      />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
         <div className="flex flex-wrap items-start justify-between gap-4">
           {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
