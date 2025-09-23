@@ -51,13 +51,49 @@ The initial scene renders a responsive, pointer-reactive lighting effect:
 - Animation loop + viewport helpers come from `@the-path/utils`.
 - Shared type contracts live in `@the-path/types` for consistency.
 
+## Mobile target platform
+
+While the MVP runs on desktop browsers, we actively target modern mobile hardware:
+
+- **Minimum device class**: 5.5" phones with at least 1080 × 2340 logical pixels (3× DPR) and 4 GB RAM.
+- **Touch interaction**: Every interactive control must expose a 44 × 44 px touch target, support gesture cancellation, and avoid hover-only affordances.
+- **Asset budget**: Ship compressed textures/audio at ≤ 2 MB per scene and cap total downloaded assets at 8 MB on first load.
+
+## Responsive UX specification
+
+The web app has two primary responsive modes:
+
+- **Vertical orientation (phones, < 640 px width)**
+  - Canvas docks to the top with a 16:9 aspect crop; navigation and CTA stack below.
+  - System status copy collapses into a single-line marquee; advanced toggles move into a bottom sheet opened via a floating FAB.
+  - Persistent controls use two columns max; tertiary controls become swipeable chips.
+- **Horizontal / tablet mode (≥ 640 px width)**
+  - Layout matches the desktop grid with sidebar controls; FAB transforms into a persistent right-rail tray.
+  - Auxiliary telemetry panels resume inline rendering with 24 px gutters.
+
+Adaptive breakpoints:
+
+| Breakpoint | Range | Layout guidance |
+| ---------- | ----- | --------------- |
+| `xs`       | 0 – 479 px | Single-column, stacked controls, marquee status line. |
+| `sm`       | 480 – 639 px | Canvas top, dual-column control grid, FAB-triggered secondary panel. |
+| `md`       | 640 – 1023 px | Sidebar returns, typography matches desktop scale step. |
+| `lg`       | ≥ 1024 px | Desktop layout, multi-panel telemetry enabled. |
+
+For wireframes, refer to `apps/web/UX_SPEC.md`.
+
 ## Performance guardrails (MVP)
+
+Mobile cold-start metrics guide development and QA:
 
 | Metric | Target | Notes |
 | ------ | ------ | ----- |
-| Time-to-Interactive | **≤ 100 ms** | Lean dependency footprint, lazy canvas work until first frame. |
-| Frame rate | **60 FPS** | Animation loop & drawing budget tuned for fluid pointer response. |
-| Bundle size | **≤ 150 kB JS** | Tree-shakeable utilities and Tailwind JIT keep the initial bundle compact. |
+| Time-to-Interactive (mid-tier Android) | **≤ 2.5 s** | Measure on Pixel 5 / Chrome with throttled 4G profile. |
+| Steady-state frame rate | **60 FPS** | Maintain fluid pointer/touch response under canvas animation load. |
+| JS bundle (compressed) | **≤ 150 kB** | Enforce via bundler budgets; monitor route-level code splitting. |
+| Total mobile download | **≤ 8 MB** | Includes fonts, textures, audio on first meaningful paint. |
+
+QA must capture these metrics on both Android (Chrome) and iOS (Safari); see `QA_CHECKLIST.md` for the full runbook.
 
 ## Next steps
 
