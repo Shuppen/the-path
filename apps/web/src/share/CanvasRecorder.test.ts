@@ -40,9 +40,9 @@ class FakeMediaRecorder {
     return true
   }
 
-  public state: MediaRecorderState = 'inactive'
+  public state: 'inactive' | 'recording' | 'paused' = 'inactive'
   public ondataavailable: ((event: BlobEvent) => void) | null = null
-  public onerror: ((event: MediaRecorderErrorEvent) => void) | null = null
+  public onerror: ((event: { error: Error }) => void) | null = null
   public onstop: (() => void) | null = null
 
   constructor(public readonly stream: MediaStream, public readonly options?: MediaRecorderOptions) {
@@ -65,7 +65,7 @@ class FakeMediaRecorder {
   }
 
   fail(error: Error): void {
-    this.onerror?.({ error } as MediaRecorderErrorEvent)
+    this.onerror?.({ error })
   }
 }
 
@@ -85,12 +85,12 @@ describe('CanvasRecorder', () => {
     if (originalMediaStream) {
       mutableGlobal.MediaStream = originalMediaStream
     } else {
-      delete mutableGlobal.MediaStream
+      delete (mutableGlobal as any).MediaStream
     }
     if (originalMediaRecorder) {
       mutableGlobal.MediaRecorder = originalMediaRecorder
     } else {
-      delete mutableGlobal.MediaRecorder
+      delete (mutableGlobal as any).MediaRecorder
     }
   })
 

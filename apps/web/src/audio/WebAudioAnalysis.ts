@@ -12,7 +12,8 @@ type AudioContextConstructor = typeof AudioContext
 const resolveAudioContextConstructor = (): AudioContextConstructor | null => {
   if (typeof window === 'undefined') return null
   const audioWindow = window as Window & { webkitAudioContext?: AudioContextConstructor }
-  return audioWindow.AudioContext ?? audioWindow.webkitAudioContext ?? null
+  // Use global AudioContext if available, fall back to webkit prefixed version
+  return (typeof AudioContext !== 'undefined' ? AudioContext : audioWindow.webkitAudioContext) ?? null
 }
 
 export type AudioPlaybackState = 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'ended'

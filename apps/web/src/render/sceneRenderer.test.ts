@@ -27,12 +27,12 @@ const setupMatchMedia = (initial: boolean) => {
           listeners.delete(listener as (event: MediaQueryListEvent) => void)
         }
       },
-      addListener: (listener: EventListenerOrEventListenerObject) => {
+      addListener: (listener: ((this: MediaQueryList, ev: MediaQueryListEvent) => any) | null) => {
         if (typeof listener === 'function') {
           listeners.add(listener as (event: MediaQueryListEvent) => void)
         }
       },
-      removeListener: (listener: EventListenerOrEventListenerObject) => {
+      removeListener: (listener: ((this: MediaQueryList, ev: MediaQueryListEvent) => any) | null) => {
         if (typeof listener === 'function') {
           listeners.delete(listener as (event: MediaQueryListEvent) => void)
         }

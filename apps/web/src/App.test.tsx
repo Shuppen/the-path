@@ -41,14 +41,14 @@ const setupMatchMedia = (initial: Record<string, boolean>): MediaMatchController
       matches: state.matches,
       media: query,
       onchange: null,
-      addEventListener: (type: string, listener: Listener) => {
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
         if (type === 'change') {
-          ensureListeners(query).add(listener)
+          ensureListeners(query).add(listener as Listener)
         }
       },
-      removeEventListener: (type: string, listener: Listener) => {
+      removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
         if (type === 'change') {
-          ensureListeners(query).delete(listener)
+          ensureListeners(query).delete(listener as Listener)
         }
       },
       addListener: (listener: Listener) => {

@@ -191,7 +191,7 @@ export class CanvasRecorder {
         this.pushChunk(event.data)
       }
 
-      recorder.onerror = (event: MediaRecorderErrorEvent) => {
+      recorder.onerror = (event: { error: Error }) => {
         const error = event.error ?? new Error('Unknown recorder error')
         this.reportError(error)
         this.stop()

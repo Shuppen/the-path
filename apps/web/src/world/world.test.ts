@@ -37,8 +37,8 @@ describe('World personal best tracking', () => {
 
     const world = new World({ seed: 'test', width: 800, height: 600 })
 
-    world.update({ dt: 0.016, jump: false, restart: false })
-    world.update({ dt: 0.016, jump: false, restart: false })
+    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
+    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
 
     const snapshot = world.snapshot()
     expect(snapshot.personalBestScore).toBe(250)
