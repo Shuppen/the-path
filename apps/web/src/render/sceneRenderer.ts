@@ -1,9 +1,22 @@
 import type { WorldState } from '../world'
+import { subscribeToReducedMotion } from '../environment/reducedMotion'
 
 const easeOutQuad = (t: number): number => 1 - (1 - t) * (1 - t)
 
 export class SceneRenderer {
-  constructor(private readonly ctx: CanvasRenderingContext2D) {}
+  private prefersReducedMotion = false
+  private unsubscribeReducedMotion?: () => void
+
+  constructor(private readonly ctx: CanvasRenderingContext2D) {
+    this.unsubscribeReducedMotion = subscribeToReducedMotion((value) => {
+      this.prefersReducedMotion = value
+    })
+  }
+
+  dispose(): void {
+    this.unsubscribeReducedMotion?.()
+    this.unsubscribeReducedMotion = undefined
+  }
 
   render(state: WorldState, alpha: number = 1): void {
     const { canvas } = this.ctx
@@ -33,10 +46,11 @@ export class SceneRenderer {
   }
 
   private drawBackground(state: WorldState, width: number, height: number): void {
-    const pulse = Math.sin(state.time * 0.6) * 0.25 + 0.75
+    const allowAnimation = !this.prefersReducedMotion
+    const pulse = allowAnimation ? Math.sin(state.time * 0.6) * 0.25 + 0.75 : 1
     const focus = state.pointer ?? {
-      x: width * 0.5 + Math.sin(state.time * 0.8) * width * 0.12,
-      y: height * 0.4 + Math.cos(state.time * 0.7) * height * 0.1,
+      x: allowAnimation ? width * 0.5 + Math.sin(state.time * 0.8) * width * 0.12 : width * 0.5,
+      y: allowAnimation ? height * 0.4 + Math.cos(state.time * 0.7) * height * 0.1 : height * 0.4,
     }
 
     const gradient = this.ctx.createRadialGradient(
@@ -118,7 +132,7 @@ export class SceneRenderer {
     const w = player.width
     const h = player.height
 
-    const bob = Math.sin(state.time * 6) * (player.onGround ? 1.5 : 3)
+    const bob = this.prefersReducedMotion ? 0 : Math.sin(state.time * 6) * (player.onGround ? 1.5 : 3)
     const bodyGradient = this.ctx.createLinearGradient(x, y, x, y + h)
     bodyGradient.addColorStop(0, 'rgba(16, 185, 129, 0.95)')
     bodyGradient.addColorStop(1, 'rgba(15, 118, 110, 0.9)')
