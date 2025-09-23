@@ -52,3 +52,9 @@ This document expands on the README to describe the responsive behaviour the fro
 - Defer non-essential telemetry rendering until after first interaction on `xs`/`sm`.
 - Respect `prefers-reduced-motion`; disable marquee + parallax in that mode.
 
+## Audio track loading UX flow
+
+1. Surface a primary button labelled «Загрузить трек» within the control surface (toolbar on desktop, bottom sheet on mobile). Activating it opens the system file picker pre-filtered to OGG/MP3/WAV extensions. Mirror this affordance with a drag-and-drop target covering the canvas so users can drop files directly.
+2. When a file is chosen or dropped, perform optimistic validation: reject unsupported MIME types and files shorter than 5 s or longer than 10 minutes with inline feedback near the control. Keep the last rejected filename in copy so the user understands what failed.
+3. On successful decoding, persist the last three selections in local storage (track title + duration + timestamp) and expose them in a «Последние треки» list under the button. Each item should preload metadata instantly and rehydrate on next visit.
+
