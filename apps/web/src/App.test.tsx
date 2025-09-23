@@ -139,6 +139,38 @@ describe('App', () => {
     }
   })
 
+  it('shows start overlay before the run and after pausing', async () => {
+    const media = setupMatchMedia({
+      '(prefers-reduced-motion: reduce)': false,
+      '(min-width: 768px)': true,
+    })
+
+    try {
+      render(<App />)
+
+      const startOverlay = await screen.findByRole('button', { name: /tap to start/i })
+      expect(startOverlay).toBeInTheDocument()
+
+      const user = userEvent.setup()
+      await user.click(startOverlay)
+
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /tap to start/i })).not.toBeInTheDocument(),
+      )
+
+      const pauseButton = await screen.findByRole('button', { name: /pause run/i })
+      expect(pauseButton).toBeEnabled()
+
+      await user.click(pauseButton)
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /tap to resume/i })).toBeInTheDocument(),
+      )
+    } finally {
+      media.restore()
+    }
+  })
+
   it('switches to mobile layout when the breakpoint shrinks', async () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': false,

@@ -37,12 +37,30 @@ describe('World personal best tracking', () => {
 
     const world = new World({ seed: 'test', width: 800, height: 600 })
 
-    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
-    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
+    expect(world.snapshot().status).toBe('menu')
+
+    world.update({
+      dt: 0.016,
+      jump: false,
+      start: true,
+      pause: false,
+      restart: false,
+      jumpHoldDuration: 0,
+    })
+    expect(world.snapshot().status).toBe('running')
+    world.update({
+      dt: 0.016,
+      jump: false,
+      start: false,
+      pause: false,
+      restart: false,
+      jumpHoldDuration: 0,
+    })
 
     const snapshot = world.snapshot()
     expect(snapshot.personalBestScore).toBe(250)
     expect(snapshot.sessionBestScore).toBe(250)
+    expect(snapshot.status).toBe('gameover')
 
     const stored = JSON.parse(localStorage.getItem(PERSONAL_BEST_STORAGE_KEY) ?? '{}') as {
       score?: number
@@ -55,6 +73,7 @@ describe('World personal best tracking', () => {
     const afterReset = world.snapshot()
     expect(afterReset.personalBestScore).toBe(250)
     expect(afterReset.sessionBestScore).toBe(250)
+    expect(afterReset.status).toBe('menu')
   })
 
   it('loads a saved personal best when constructed', () => {
