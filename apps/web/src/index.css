@@ -16,3 +16,21 @@ body {
 canvas {
   display: block;
 }
+
+@keyframes status-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.telemetry-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.telemetry-scroll::-webkit-scrollbar {
+  display: none;
+}
