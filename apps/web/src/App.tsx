@@ -9,6 +9,7 @@ import { SceneRenderer } from './render/sceneRenderer'
 import { World, type WorldSnapshot } from './world'
 import { WebAudioAnalysis, type AudioPlaybackState, type ProgressEvent as AudioProgressEvent } from './audio/WebAudioAnalysis'
 import { DEFAULT_TRACK_ID, TRACK_MANIFEST } from './assets/tracks'
+import CanvasRecorder, { type RecorderState } from './share/CanvasRecorder'
 
 const padScore = (value: number): string => value.toString().padStart(6, '0')
 
@@ -50,6 +51,7 @@ export function App() {
   const worldRef = useRef<World | null>(null)
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
+  const recorderRef = useRef<CanvasRecorder | null>(null)
 
   if (typeof window !== 'undefined' && audioRef.current === null) {
     audioRef.current = new WebAudioAnalysis()
@@ -69,6 +71,12 @@ export function App() {
     return { time, duration, progress }
   })
   const [worldReady, setWorldReady] = useState(false)
+
+  const [recordingState, setRecordingState] = useState<RecorderState>('idle')
+  const [recordingSupported, setRecordingSupported] = useState(false)
+  const [recordingError, setRecordingError] = useState<string | null>(null)
+  const [bufferInfo, setBufferInfo] = useState({ duration: 0, limit: 20 })
+  const [isSavingClip, setIsSavingClip] = useState(false)
 
   const [hud, setHud] = useState<WorldSnapshot>(() => ({
     score: 0,
@@ -92,6 +100,56 @@ export function App() {
       }
       return snapshot
     })
+  }, [])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+
+    const recorder = new CanvasRecorder(canvas, {
+      bufferDuration: 20,
+      audioStreamFactory: () => {
+        const audio = audioRef.current
+        if (!audio || !audio.isSupported()) return null
+        const recording = audio.createRecordingStream()
+        if (!recording) return null
+        return {
+          stream: recording.stream,
+          cleanup: recording.disconnect,
+        }
+      },
+    })
+
+    recorderRef.current = recorder
+    const supported = recorder.isSupported()
+    setRecordingSupported(supported)
+    if (!supported) {
+      setRecordingError('Recording is not supported in this browser')
+    }
+    setBufferInfo({ duration: recorder.getBufferedTime(), limit: recorder.getBufferDuration() })
+
+    const detachState = recorder.onStateChange((state) => {
+      setRecordingState(state)
+      if (state === 'recording') {
+        setRecordingError(null)
+      }
+    })
+    const detachBuffer = recorder.onBufferUpdate((info) => {
+      setBufferInfo(info)
+    })
+    const detachError = recorder.onError(({ error }) => {
+      setRecordingError(error.message)
+    })
+
+    return () => {
+      detachState()
+      detachBuffer()
+      detachError()
+      recorder.destroy()
+      if (recorderRef.current === recorder) {
+        recorderRef.current = null
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -299,7 +357,81 @@ export function App() {
     setSelectedTrackId(trackId)
   }, [])
 
+  const handleToggleRecording = useCallback(() => {
+    const recorder = recorderRef.current
+    if (!recorder) return
+    if (recorder.getState() === 'recording') {
+      recorder.stop()
+      return
+    }
+    const started = recorder.start()
+    if (!started) {
+      setRecordingError(recorder.getLastError()?.message ?? 'Unable to start recording')
+    }
+  }, [])
+
+  const handleSaveClip = useCallback(async () => {
+    const recorder = recorderRef.current
+    if (!recorder) return
+    try {
+      setRecordingError(null)
+      setIsSavingClip(true)
+      const blob = recorder.exportClip()
+      if (!blob || blob.size === 0) {
+        setRecordingError('No recording data available yet')
+        return
+      }
+      const fileName = `the-path-${Date.now()}.webm`
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.canShare === 'function' &&
+        typeof navigator.share === 'function' &&
+        typeof File !== 'undefined'
+      ) {
+        const file = new File([blob], fileName, { type: blob.type })
+        const shareData = { files: [file], title: 'The Path clip' }
+        if (navigator.canShare(shareData)) {
+          await navigator.share(shareData)
+          return
+        }
+      }
+
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
+    } catch (error) {
+      setRecordingError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsSavingClip(false)
+    }
+  }, [])
+
   const playbackStatus = audioSupported ? describeAudioState(audioState) : 'Audio unavailable'
+  const bufferLimit = bufferInfo.limit > 0 ? bufferInfo.limit : 0
+  const bufferedSeconds = bufferLimit > 0 ? Math.min(bufferInfo.duration, bufferLimit) : bufferInfo.duration
+  const bufferRatio = bufferLimit > 0 && Number.isFinite(bufferLimit)
+    ? Math.min(bufferedSeconds / bufferLimit, 1)
+    : 0
+  const recordButtonLabel = recordingState === 'recording' ? 'Stop recording' : 'Record gameplay'
+  const recordingStatus = !recordingSupported
+    ? 'Recording unavailable'
+    : isSavingClip
+      ? 'Saving clip…'
+      : recordingState === 'recording'
+        ? 'Recording in progress'
+        : recordingError
+          ? 'Recorder error'
+          : 'Recorder idle'
+  const saveDisabled = !recordingSupported || bufferInfo.duration <= 0 || isSavingClip
+  const bufferedLabel = Number.isFinite(bufferedSeconds) ? bufferedSeconds.toFixed(1) : '0.0'
+  const bufferLimitLabel = Number.isFinite(bufferLimit) ? bufferLimit.toFixed(0) : '0'
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -412,6 +544,49 @@ export function App() {
                     <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Best</p>
                     <p className="font-mono text-2xl font-semibold text-slate-50">x{hud.bestCombo}</p>
                   </div>
+                </div>
+              </div>
+
+              <div className="pointer-events-auto w-full max-w-xs space-y-3 rounded-2xl bg-slate-900/60 px-4 py-3 shadow-lg ring-1 ring-white/10 sm:w-64">
+                <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Recorder</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleToggleRecording}
+                    disabled={!recordingSupported}
+                    className={
+                      'inline-flex flex-1 items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ' +
+                      (recordingState === 'recording'
+                        ? 'border border-rose-400/60 bg-rose-500/20 text-rose-100 shadow-lg shadow-rose-500/20 hover:bg-rose-500/30'
+                        : 'border border-cyan-400/60 bg-cyan-400/15 text-cyan-100 shadow-lg shadow-cyan-500/20 hover:bg-cyan-400/25')
+                    }
+                  >
+                    {recordButtonLabel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveClip}
+                    disabled={saveDisabled}
+                    className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200/40 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isSavingClip ? 'Saving…' : 'Save clip'}
+                  </button>
+                </div>
+                <div className="space-y-1">
+                  <div className="relative h-1.5 overflow-hidden rounded-full bg-slate-800/60">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-cyan-400/80 transition-all"
+                      style={{ width: `${Math.round(bufferRatio * 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[0.7rem] text-slate-400">
+                    <span>{bufferedLabel}s buffered</span>
+                    <span>{bufferLimitLabel}s max</span>
+                  </div>
+                </div>
+                <div className="space-y-1 text-[0.7rem]">
+                  <p className="text-slate-400">{recordingStatus}</p>
+                  {recordingError ? <p className="text-rose-300">{recordingError}</p> : null}
                 </div>
               </div>
 
