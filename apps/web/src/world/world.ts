@@ -61,6 +61,7 @@ export class World {
   private flashId = 0
   private sessionBestScore = 0
   private personalBest: PersonalBestRecord
+  private pendingReset = false
 
   constructor(config: WorldConfig) {
     this.baseSeed = config.seed
@@ -128,14 +129,23 @@ export class World {
     this.advanceFlashes(input.dt)
 
     if (input.restart) {
+
       input.onRunRestart?.({ reason: 'manual', seed: this.baseSeed })
+
+      this.pendingReset = true
+
       this.reset(this.baseSeed)
       return
     }
 
     if (this.state.status === 'gameover') {
+
       if (input.jump) {
         input.onRunRestart?.({ reason: 'gameover', seed: this.baseSeed })
+
+      if (input.jump || input.restart) {
+        this.pendingReset = true
+
         this.reset(this.baseSeed)
       }
       return
@@ -231,6 +241,12 @@ export class World {
     if (pointer) {
       this.state.pointer = { ...pointer }
     }
+  }
+
+  consumePendingReset(): boolean {
+    const pending = this.pendingReset
+    this.pendingReset = false
+    return pending
   }
 
   private addFlash(flash: Omit<FlashEffect, 'id' | 'age'>): void {
