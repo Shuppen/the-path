@@ -86,29 +86,68 @@ interface StatusMarqueeProps {
   innerClassName?: string
 }
 
-const StatusMarquee = ({
+export const StatusMarquee = ({
   message,
   prefersReducedMotion,
   className,
   innerClassName,
-}: StatusMarqueeProps) => (
-  <div className={classNames('relative overflow-hidden', className)}>
-    <div
-      className={classNames('flex min-w-full flex-nowrap gap-8 whitespace-nowrap', innerClassName)}
-      data-testid="status-marquee-content"
-      style={
-        prefersReducedMotion
-          ? { animation: 'none', transform: 'translateX(0)' }
-          : { animation: 'status-marquee 20s linear infinite' }
-      }
-    >
-      <span className="flex-shrink-0">{message}</span>
-      <span className="flex-shrink-0" aria-hidden="true">
-        {message}
-      </span>
+}: StatusMarqueeProps) => {
+  const [isOverflowing, setIsOverflowing] = useState(false)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const node = contentRef.current
+
+    if (!node) {
+      setIsOverflowing(false)
+      return
+    }
+
+    const calculateOverflow = () => {
+      const nextIsOverflowing = node.scrollWidth > node.clientWidth
+      setIsOverflowing((previous) => (previous === nextIsOverflowing ? previous : nextIsOverflowing))
+    }
+
+    calculateOverflow()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      calculateOverflow()
+    })
+    observer.observe(node)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [message])
+
+  const shouldAnimate = isOverflowing && !prefersReducedMotion
+
+  return (
+    <div className={classNames('relative overflow-hidden', className)}>
+      <div
+        ref={contentRef}
+        className={classNames('flex min-w-full flex-nowrap gap-8 whitespace-nowrap', innerClassName)}
+        data-testid="status-marquee-content"
+        style={
+          shouldAnimate
+            ? { animation: 'status-marquee 20s linear infinite' }
+            : { animation: 'none', transform: 'translateX(0)' }
+        }
+      >
+        <span className="flex-shrink-0">{message}</span>
+        {shouldAnimate ? (
+          <span className="flex-shrink-0" aria-hidden="true">
+            {message}
+          </span>
+        ) : null}
+      </div>
     </div>
-  </div>
-)
+  )
+}
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
