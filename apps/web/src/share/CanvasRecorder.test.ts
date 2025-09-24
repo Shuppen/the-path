@@ -85,12 +85,12 @@ describe('CanvasRecorder', () => {
     if (originalMediaStream) {
       mutableGlobal.MediaStream = originalMediaStream
     } else {
-      delete (mutableGlobal as any).MediaStream
+      mutableGlobal.MediaStream = undefined
     }
     if (originalMediaRecorder) {
       mutableGlobal.MediaRecorder = originalMediaRecorder
     } else {
-      delete (mutableGlobal as any).MediaRecorder
+      mutableGlobal.MediaRecorder = undefined
     }
   })
 

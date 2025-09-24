@@ -163,8 +163,14 @@ export function App() {
     personalBestScore: 0,
   }))
 
+  const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
   const [isSheetOpen, setSheetOpen] = useState(false)
+
+  const canvasAspectStyle = useMemo(
+    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
+    [isSmallViewport]
+  )
 
   useEffect(() => {
     if (isDesktop) {
@@ -948,8 +954,18 @@ export function App() {
   )
 
   const canvasSection = (
-    <section className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10">
-      <canvas ref={canvasRef} className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]" role="presentation" />
+    <section
+      className={classNames(
+        'relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10',
+        'aspect-hero-video sm:aspect-hero-video-wide'
+      )}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block w-full cursor-crosshair bg-transparent"
+        role="presentation"
+        style={canvasAspectStyle}
+      />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
         <div className="flex flex-wrap items-start justify-between gap-4">
           {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
