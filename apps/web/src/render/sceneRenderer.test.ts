@@ -78,12 +78,14 @@ const createMockContext = (): CanvasRenderingContext2D => {
   canvas.height = 600
 
   const gradient = { addColorStop: vi.fn() }
+  const pattern = { setTransform: vi.fn() }
 
   const context: Partial<CanvasRenderingContext2D> = {
     canvas,
     clearRect: vi.fn(),
     createLinearGradient: vi.fn(() => gradient as unknown as CanvasGradient),
     createRadialGradient: vi.fn(() => gradient as unknown as CanvasGradient),
+    createPattern: vi.fn(() => pattern as unknown as CanvasPattern),
     fillRect: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
@@ -99,6 +101,7 @@ const createMockContext = (): CanvasRenderingContext2D => {
     roundRect: vi.fn(),
     rect: vi.fn(),
     fillText: vi.fn(),
+    drawImage: vi.fn(),
   }
 
   ;(context as { fillStyle: unknown }).fillStyle = ''

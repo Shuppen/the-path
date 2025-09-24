@@ -1,0 +1,32 @@
+{
+  "background": {
+    "path": "/textures/background-nebula.svg",
+    "scale": 0.85,
+    "palette": ["#020617", "#0ea5e9", "#14b8a6", "#bae6fd"]
+  },
+  "ground": {
+    "path": "/textures/ground-strata.svg",
+    "scale": 0.6,
+    "palette": ["#05202d", "#0f766e", "#38bdf8", "#0b1120"]
+  },
+  "obstacle-spire": {
+    "path": "/textures/obstacle-spire.svg",
+    "scale": 0.7,
+    "palette": ["#f472b6", "#be185d", "#4c1d95"]
+  },
+  "obstacle-pulse": {
+    "path": "/textures/obstacle-pulse.svg",
+    "scale": 0.7,
+    "palette": ["#38bdf8", "#0ea5e9", "#0b4a6f"]
+  },
+  "obstacle-block": {
+    "path": "/textures/obstacle-block.svg",
+    "scale": 0.7,
+    "palette": ["#93c5fd", "#3b82f6", "#1d4ed8"]
+  },
+  "player": {
+    "path": "/textures/player-suit.svg",
+    "scale": 1,
+    "palette": ["#10b981", "#0f766e", "#e2e8f0", "#5eead4"]
+  }
+}
