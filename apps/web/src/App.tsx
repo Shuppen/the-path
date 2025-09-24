@@ -390,6 +390,30 @@ export function App() {
     }
   }, [])
 
+  const resetAudioTimeline = useCallback(
+    ({ resumeWhenEnded = true }: { resumeWhenEnded?: boolean } = {}) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setAudioProgress((previous) => ({
+          ...previous,
+          time: 0,
+          progress: 0,
+        }))
+        return
+      }
+
+      const previousState = audio.getState()
+      audio.setCurrentTime(0)
+
+      if (previousState === 'ended' && resumeWhenEnded) {
+        audio.play().catch((error) => {
+          console.error(error)
+        })
+      }
+    },
+    [audioSupported],
+  )
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -455,13 +479,25 @@ export function App() {
     resizeObserver.observe(canvas)
     window.addEventListener('resize', updateMetrics)
 
+    const handleRunRestart = () => {
+      resetAudioTimeline()
+    }
+
     const loop = createGameLoop({
       update: (dt) => {
         const snapshot = input.consumeActions()
+
+        world.update({
+          ...snapshot,
+          dt,
+          onRunRestart: handleRunRestart,
+        })
+
         world.update({ ...snapshot, dt })
         if (world.consumePendingReset()) {
           resetAudioTimeline()
         }
+
         updateHud()
       },
       render: (alpha) => {
@@ -529,6 +565,7 @@ export function App() {
     resetAudioTimeline()
     const nextSeed = createSeed()
     seedRef.current = nextSeed
+    resetAudioTimeline()
     world.reset(nextSeed)
     pushHud(world)
   }, [pushHud, resetAudioTimeline])

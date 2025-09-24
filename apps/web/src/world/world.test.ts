@@ -12,6 +12,7 @@ vi.mock('./obstacles', () => ({
 }))
 
 import { PERSONAL_BEST_STORAGE_KEY } from './personalBest'
+import type { ObstacleState } from './types'
 import { World } from './world'
 
 const baseObstacleResult = () => ({
@@ -19,6 +20,60 @@ const baseObstacleResult = () => ({
   scored: 0,
   comboIncreased: false,
   newFlashes: [],
+})
+
+describe('World restart timeline control', () => {
+  beforeEach(() => {
+    advanceObstaclesMock.mockReset()
+    evaluateObstaclesMock.mockReset()
+    advanceObstaclesMock.mockImplementation((obstacles) => obstacles)
+    evaluateObstaclesMock.mockImplementation(baseObstacleResult)
+  })
+
+  it('requests a timeline reset when restarting after a late crash', () => {
+    let externalTime = 32.75
+    const world = new World({ seed: 'late-run', width: 800, height: 600 })
+    world.attachTimeSource(() => externalTime)
+
+    const obstacle: ObstacleState = {
+      id: 1,
+      kind: 'pulse',
+      position: { x: 180, y: 320 },
+      width: 48,
+      height: 64,
+      speedFactor: 1,
+      passed: false,
+      beatIndex: 96,
+    }
+
+    world.state.status = 'gameover'
+    world.state.time = externalTime
+    world.state.player.alive = false
+    world.state.obstacles = [obstacle]
+
+    const requestReset = vi.fn(() => {
+      externalTime = 0
+    })
+
+    world.update({
+      dt: 0.016,
+      jump: true,
+      restart: false,
+      jumpHoldDuration: 0,
+      onRunRestart: requestReset,
+    })
+
+    expect(requestReset).toHaveBeenCalledTimes(1)
+    expect(requestReset).toHaveBeenCalledWith({ reason: 'gameover', seed: 'late-run' })
+    expect(world.state.status).toBe('running')
+    expect(world.state.obstacles.length).toBe(0)
+
+    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
+
+    expect(externalTime).toBe(0)
+    expect(world.state.time).toBe(0)
+    expect(world.state.obstacles.length).toBe(0)
+  })
 })
 
 describe('World personal best tracking', () => {
