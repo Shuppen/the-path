@@ -58,12 +58,18 @@ export class InputManager {
   }
 
   private readonly handlePointerMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse' && event.cancelable) {
+      event.preventDefault()
+    }
     const metrics = this.getMetrics()
     if (!metrics) return
     this.pointer = toCanvasCoordinates(event, metrics)
   }
 
   private readonly handlePointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse' && event.cancelable) {
+      event.preventDefault()
+    }
     const metrics = this.getMetrics()
     if (!metrics) return
     this.pointer = toCanvasCoordinates(event, metrics)

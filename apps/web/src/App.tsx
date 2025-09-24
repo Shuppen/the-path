@@ -164,8 +164,14 @@ export function App() {
     personalBestScore: 0,
   }))
 
+  const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
   const [isSheetOpen, setSheetOpen] = useState(false)
+
+  const canvasAspectStyle = useMemo(
+    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
+    [isSmallViewport]
+  )
 
   useEffect(() => {
     if (isDesktop) {
@@ -294,6 +300,23 @@ export function App() {
     })
   }, [])
 
+  const resetAudioTimeline = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio || !audio.isSupported()) return
+    const state = audio.getState()
+    if (state === 'idle' || state === 'loading') {
+      audio.setCurrentTime(0)
+      return
+    }
+    const shouldResume = state === 'playing'
+    audio.stop()
+    if (shouldResume) {
+      audio.play().catch((error) => {
+        console.error(error)
+      })
+    }
+  }, [])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -368,6 +391,30 @@ export function App() {
     }
   }, [])
 
+  const resetAudioTimeline = useCallback(
+    ({ resumeWhenEnded = true }: { resumeWhenEnded?: boolean } = {}) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setAudioProgress((previous) => ({
+          ...previous,
+          time: 0,
+          progress: 0,
+        }))
+        return
+      }
+
+      const previousState = audio.getState()
+      audio.setCurrentTime(0)
+
+      if (previousState === 'ended' && resumeWhenEnded) {
+        audio.play().catch((error) => {
+          console.error(error)
+        })
+      }
+    },
+    [audioSupported],
+  )
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -434,11 +481,26 @@ export function App() {
     resizeObserver.observe(canvas)
     window.addEventListener('resize', updateMetrics)
 
+    const handleRunRestart = () => {
+      resetAudioTimeline()
+    }
+
     const loop = createGameLoop({
       update: (dt) => {
         input.setStatus(world.state.status)
         const snapshot = input.consumeActions()
+
+        world.update({
+          ...snapshot,
+          dt,
+          onRunRestart: handleRunRestart,
+        })
+
         world.update({ ...snapshot, dt })
+        if (world.consumePendingReset()) {
+          resetAudioTimeline()
+        }
+
         updateHud()
       },
       render: (alpha) => {
@@ -461,7 +523,7 @@ export function App() {
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
     }
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -506,18 +568,21 @@ export function App() {
   const handleRestart = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     world.reset()
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleNewSeed = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     const nextSeed = createSeed()
     seedRef.current = nextSeed
+    resetAudioTimeline()
     world.reset(nextSeed)
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleTogglePlayback = useCallback(() => {
     const audio = audioRef.current
@@ -991,8 +1056,27 @@ export function App() {
   )
 
   const canvasSection = (
+
+    <section
+      className={classNames(
+        'relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10',
+        'aspect-hero-video sm:aspect-hero-video-wide'
+      )}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block w-full cursor-crosshair bg-transparent"
+        role="presentation"
+        style={canvasAspectStyle}
+
     <section className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10">
-      <canvas ref={canvasRef} className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]" role="presentation" />
+      <canvas
+        ref={canvasRef}
+        className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]"
+        style={{ touchAction: 'none' }}
+        aria-label="Gameplay canvas. Use touch gestures to guide the runner."
+
+      />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
         {showHudPanels ? (
           <>

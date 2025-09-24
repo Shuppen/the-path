@@ -1,7 +1,23 @@
-import type { WorldState } from '../world'
+import type { ObstacleKind, WorldState } from '../world'
 import { subscribeToReducedMotion } from '../environment/reducedMotion'
+import { getTextureImage, getTexturePattern, primeTexture, type TextureKey } from './textures'
 
 const easeOutQuad = (t: number): number => 1 - (1 - t) * (1 - t)
+
+const requiredTextureKeys: TextureKey[] = [
+  'background',
+  'ground',
+  'obstacle-spire',
+  'obstacle-pulse',
+  'obstacle-block',
+  'player',
+]
+
+const obstacleTextureMap: Record<ObstacleKind, TextureKey> = {
+  spire: 'obstacle-spire',
+  pulse: 'obstacle-pulse',
+  block: 'obstacle-block',
+}
 
 export class SceneRenderer {
   private prefersReducedMotion = false
@@ -11,6 +27,10 @@ export class SceneRenderer {
     this.unsubscribeReducedMotion = subscribeToReducedMotion((value) => {
       this.prefersReducedMotion = value
     })
+
+    for (const key of requiredTextureKeys) {
+      primeTexture(key)
+    }
   }
 
   dispose(): void {
@@ -25,11 +45,11 @@ export class SceneRenderer {
 
     this.ctx.clearRect(0, 0, width, height)
 
-    const supportsGradients =
-      typeof this.ctx.createLinearGradient === 'function' &&
-      typeof this.ctx.createRadialGradient === 'function'
+    const supportsLinearGradient = typeof this.ctx.createLinearGradient === 'function'
+    const supportsRadialGradient = typeof this.ctx.createRadialGradient === 'function'
+    const supportsPatterns = typeof this.ctx.createPattern === 'function'
 
-    if (!supportsGradients) {
+    if (!supportsPatterns && (!supportsLinearGradient || !supportsRadialGradient)) {
       this.ctx.fillStyle = '#020617'
       this.ctx.fillRect(0, 0, width, height)
       return
@@ -53,30 +73,66 @@ export class SceneRenderer {
       y: allowAnimation ? height * 0.4 + Math.cos(state.time * 0.7) * height * 0.1 : height * 0.4,
     }
 
-    const gradient = this.ctx.createRadialGradient(
-      focus.x,
-      focus.y,
-      Math.min(width, height) * 0.1,
-      focus.x,
-      focus.y,
-      Math.max(width, height) * 0.8 * pulse
-    )
+    const backgroundPattern =
+      typeof this.ctx.createPattern === 'function'
+        ? getTexturePattern(this.ctx, 'background', { repetition: 'repeat' })
+        : undefined
 
-    gradient.addColorStop(0, 'rgba(14, 165, 233, 0.18)')
-    gradient.addColorStop(0.25, 'rgba(13, 148, 136, 0.12)')
-    gradient.addColorStop(1, '#020617')
+    if (backgroundPattern) {
+      this.ctx.save()
+      this.ctx.fillStyle = backgroundPattern
+      this.ctx.fillRect(0, 0, width, height)
+      this.ctx.restore()
+    }
 
-    this.ctx.fillStyle = gradient
-    this.ctx.fillRect(0, 0, width, height)
+    if (typeof this.ctx.createRadialGradient === 'function') {
+      const gradient = this.ctx.createRadialGradient(
+        focus.x,
+        focus.y,
+        Math.min(width, height) * 0.1,
+        focus.x,
+        focus.y,
+        Math.max(width, height) * 0.8 * pulse
+      )
+
+      const baseOpacity = backgroundPattern ? 0.75 : 1
+
+      gradient.addColorStop(0, `rgba(14, 165, 233, ${0.18 * baseOpacity})`)
+      gradient.addColorStop(0.25, `rgba(13, 148, 136, ${0.12 * baseOpacity})`)
+      gradient.addColorStop(1, '#020617')
+
+      this.ctx.fillStyle = gradient
+      this.ctx.fillRect(0, 0, width, height)
+    } else if (!backgroundPattern) {
+      this.ctx.fillStyle = '#020617'
+      this.ctx.fillRect(0, 0, width, height)
+    }
   }
 
   private drawGround(state: WorldState): void {
     const { stage } = state
-    const gradient = this.ctx.createLinearGradient(0, stage.groundY, 0, stage.height)
-    gradient.addColorStop(0, 'rgba(15, 118, 110, 0.85)')
-    gradient.addColorStop(1, 'rgba(15, 23, 42, 0.95)')
-    this.ctx.fillStyle = gradient
-    this.ctx.fillRect(0, stage.groundY, stage.width, stage.height - stage.groundY)
+    const groundPattern =
+      typeof this.ctx.createPattern === 'function'
+        ? getTexturePattern(this.ctx, 'ground', { repetition: 'repeat' })
+        : undefined
+
+    if (groundPattern) {
+      this.ctx.save()
+      this.ctx.fillStyle = groundPattern
+      this.ctx.fillRect(0, stage.groundY, stage.width, stage.height - stage.groundY)
+      this.ctx.restore()
+    }
+
+    if (typeof this.ctx.createLinearGradient === 'function') {
+      const gradient = this.ctx.createLinearGradient(0, stage.groundY, 0, stage.height)
+      gradient.addColorStop(0, groundPattern ? 'rgba(15, 118, 110, 0.45)' : 'rgba(15, 118, 110, 0.85)')
+      gradient.addColorStop(1, groundPattern ? 'rgba(15, 23, 42, 0.7)' : 'rgba(15, 23, 42, 0.95)')
+      this.ctx.fillStyle = gradient
+      this.ctx.fillRect(0, stage.groundY, stage.width, stage.height - stage.groundY)
+    } else if (!groundPattern) {
+      this.ctx.fillStyle = '#0f172a'
+      this.ctx.fillRect(0, stage.groundY, stage.width, stage.height - stage.groundY)
+    }
 
     this.ctx.strokeStyle = 'rgba(56, 189, 248, 0.2)'
     this.ctx.lineWidth = 2
@@ -93,19 +149,32 @@ export class SceneRenderer {
       const w = obstacle.width
       const h = obstacle.height
 
-      const gradient = this.ctx.createLinearGradient(x, y, x, y + h)
-      if (obstacle.kind === 'spire') {
-        gradient.addColorStop(0, 'rgba(244, 114, 182, 0.9)')
-        gradient.addColorStop(1, 'rgba(244, 63, 94, 0.4)')
-      } else if (obstacle.kind === 'pulse') {
-        gradient.addColorStop(0, 'rgba(56, 189, 248, 0.8)')
-        gradient.addColorStop(1, 'rgba(14, 116, 144, 0.4)')
-      } else {
-        gradient.addColorStop(0, 'rgba(147, 197, 253, 0.8)')
-        gradient.addColorStop(1, 'rgba(59, 130, 246, 0.4)')
-      }
+      const textureKey = obstacleTextureMap[obstacle.kind]
+      const obstaclePattern =
+        typeof this.ctx.createPattern === 'function'
+          ? getTexturePattern(this.ctx, textureKey, { repetition: 'repeat' })
+          : undefined
 
-      this.ctx.fillStyle = gradient
+      if (obstaclePattern) {
+        this.ctx.save()
+        this.ctx.fillStyle = obstaclePattern
+      } else if (typeof this.ctx.createLinearGradient === 'function') {
+        const gradient = this.ctx.createLinearGradient(x, y, x, y + h)
+        if (obstacle.kind === 'spire') {
+          gradient.addColorStop(0, 'rgba(244, 114, 182, 0.9)')
+          gradient.addColorStop(1, 'rgba(244, 63, 94, 0.4)')
+        } else if (obstacle.kind === 'pulse') {
+          gradient.addColorStop(0, 'rgba(56, 189, 248, 0.8)')
+          gradient.addColorStop(1, 'rgba(14, 116, 144, 0.4)')
+        } else {
+          gradient.addColorStop(0, 'rgba(147, 197, 253, 0.8)')
+          gradient.addColorStop(1, 'rgba(59, 130, 246, 0.4)')
+        }
+
+        this.ctx.fillStyle = gradient
+      } else {
+        this.ctx.fillStyle = '#1d4ed8'
+      }
       this.ctx.beginPath()
       if (obstacle.kind === 'spire') {
         this.ctx.moveTo(x + w * 0.5, y)
@@ -116,6 +185,10 @@ export class SceneRenderer {
         this.drawRoundedRect(x, y, w, h, Math.min(10, w * 0.2))
       }
       this.ctx.fill()
+
+      if (obstaclePattern) {
+        this.ctx.restore()
+      }
 
       if (!obstacle.passed) {
         this.ctx.strokeStyle = 'rgba(244, 244, 255, 0.2)'
@@ -133,22 +206,31 @@ export class SceneRenderer {
     const h = player.height
 
     const bob = this.prefersReducedMotion ? 0 : Math.sin(state.time * 6) * (player.onGround ? 1.5 : 3)
-    const bodyGradient = this.ctx.createLinearGradient(x, y, x, y + h)
-    bodyGradient.addColorStop(0, 'rgba(16, 185, 129, 0.95)')
-    bodyGradient.addColorStop(1, 'rgba(15, 118, 110, 0.9)')
 
     this.ctx.save()
     this.ctx.translate(0, -bob)
-    this.ctx.fillStyle = bodyGradient
-    this.drawRoundedRect(x, y, w, h, 12)
-    this.ctx.fill()
+    const playerTexture = getTextureImage('player')
+    if (playerTexture) {
+      this.ctx.drawImage(playerTexture, x, y, w, h)
+    } else if (typeof this.ctx.createLinearGradient === 'function') {
+      const bodyGradient = this.ctx.createLinearGradient(x, y, x, y + h)
+      bodyGradient.addColorStop(0, 'rgba(16, 185, 129, 0.95)')
+      bodyGradient.addColorStop(1, 'rgba(15, 118, 110, 0.9)')
+      this.ctx.fillStyle = bodyGradient
+      this.drawRoundedRect(x, y, w, h, 12)
+      this.ctx.fill()
 
-    const visorGradient = this.ctx.createLinearGradient(x, y + h * 0.3, x, y + h * 0.55)
-    visorGradient.addColorStop(0, 'rgba(226, 232, 240, 0.85)')
-    visorGradient.addColorStop(1, 'rgba(148, 163, 184, 0.3)')
-    this.ctx.fillStyle = visorGradient
-    this.drawRoundedRect(x + w * 0.1, y + h * 0.3, w * 0.8, h * 0.25, 8)
-    this.ctx.fill()
+      const visorGradient = this.ctx.createLinearGradient(x, y + h * 0.3, x, y + h * 0.55)
+      visorGradient.addColorStop(0, 'rgba(226, 232, 240, 0.85)')
+      visorGradient.addColorStop(1, 'rgba(148, 163, 184, 0.3)')
+      this.ctx.fillStyle = visorGradient
+      this.drawRoundedRect(x + w * 0.1, y + h * 0.3, w * 0.8, h * 0.25, 8)
+      this.ctx.fill()
+    } else {
+      this.ctx.fillStyle = '#10b981'
+      this.drawRoundedRect(x, y, w, h, 12)
+      this.ctx.fill()
+    }
 
     this.ctx.globalAlpha = alpha * 0.45
     this.ctx.fillStyle = 'rgba(56, 189, 248, 0.45)'
