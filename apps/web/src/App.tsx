@@ -786,7 +786,9 @@ export function App() {
         <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm shadow-lg shadow-slate-900/30">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Последние треки</p>
-            <span className="text-[0.65rem] text-slate-500">Сессия хранит до {MAX_RECENT_TRACKS} записей</span>
+            <span className="text-[0.65rem] text-slate-500">
+              Запоминаем до {MAX_RECENT_TRACKS} последних загрузок за сессию
+            </span>
           </div>
           <div className="mt-3 space-y-2">
             {recentTracks.map((entry) => {

@@ -10,7 +10,7 @@ export interface StoredRecentTrack {
 }
 
 export const RECENT_TRACKS_STORAGE_KEY = 'the-path:recent-tracks'
-export const MAX_RECENT_TRACKS = 6
+export const MAX_RECENT_TRACKS = 3
 
 const getStorage = (storage?: Storage): Storage | null => {
   if (storage) return storage
@@ -70,8 +70,11 @@ export const upsertRecentTrack = (
   entry: StoredRecentTrack,
   limit = MAX_RECENT_TRACKS,
 ): StoredRecentTrack[] => {
+  const safeLimit = Math.max(1, limit)
   const filtered = tracks.filter((track) => track.id !== entry.id)
-  return [entry, ...filtered].slice(0, Math.max(1, limit))
+  const deduped = [...filtered, entry]
+  deduped.sort((a, b) => b.createdAt - a.createdAt)
+  return deduped.slice(0, safeLimit)
 }
 
 export const toManifest = (entry: StoredRecentTrack): AudioTrackManifestEntry => ({
