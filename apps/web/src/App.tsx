@@ -114,6 +114,7 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const metricsRef = useRef<ViewportMetrics | null>(null)
   const worldRef = useRef<World | null>(null)
+  const inputRef = useRef<InputManager | null>(null)
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
   const recorderRef = useRef<CanvasRecorder | null>(null)
@@ -157,7 +158,7 @@ export function App() {
     score: 0,
     combo: 0,
     bestCombo: 0,
-    status: 'running',
+    status: 'menu',
     seed: seedRef.current,
     sessionBestScore: 0,
     personalBestScore: 0,
@@ -461,6 +462,7 @@ export function App() {
     const renderer = new SceneRenderer(context)
     const input = new InputManager(canvas, () => metricsRef.current)
     input.bind()
+    inputRef.current = input
 
     const updateHud = () => pushHud(world)
     updateHud()
@@ -485,6 +487,7 @@ export function App() {
 
     const loop = createGameLoop({
       update: (dt) => {
+        input.setStatus(world.state.status)
         const snapshot = input.consumeActions()
 
         world.update({
@@ -511,6 +514,9 @@ export function App() {
       loop.stop()
       renderer.dispose()
       input.unbind()
+      if (inputRef.current === input) {
+        inputRef.current = null
+      }
       resizeObserver.disconnect()
       window.removeEventListener('resize', updateMetrics)
       if (detachAudioEvents) detachAudioEvents()
@@ -550,6 +556,14 @@ export function App() {
     if (!world || !selectedTrack) return
     world.reset(undefined, { bpm: selectedTrack.bpm })
   }, [selectedTrack, worldReady])
+
+  const handleStartRun = useCallback(() => {
+    inputRef.current?.requestStart()
+  }, [])
+
+  const handlePauseRun = useCallback(() => {
+    inputRef.current?.requestPause()
+  }, [])
 
   const handleRestart = useCallback(() => {
     const world = worldRef.current
@@ -691,16 +705,37 @@ export function App() {
   const bufferedLabel = Number.isFinite(bufferedSeconds) ? bufferedSeconds.toFixed(1) : '0.0'
   const bufferLimitLabel = Number.isFinite(bufferLimit) ? bufferLimit.toFixed(0) : '0'
 
-  const statusMessage =
-    hud.status === 'gameover'
-      ? 'Signal lost · tap or press Space/R to restart'
-      : !audioSupported
-        ? 'Web audio unavailable · generator runs on default tempo'
-        : audioState === 'loading'
-          ? 'Analyzing track · hold tight for beat data'
-          : audioState === 'playing'
-            ? 'Stay in rhythm · jump with Space, click or tap'
-            : 'Audio paused · resume playback to sync obstacles'
+  const statusMessage = (() => {
+    if (hud.status === 'menu') {
+      return 'Navigation idle · tap or press Space to start the run'
+    }
+    if (hud.status === 'paused') {
+      return 'Run paused · tap or press Space to resume'
+    }
+    if (hud.status === 'gameover') {
+      return 'Signal lost · tap or press Space/R to restart'
+    }
+    if (!audioSupported) {
+      return 'Web audio unavailable · generator runs on default tempo'
+    }
+    if (audioState === 'loading') {
+      return 'Analyzing track · hold tight for beat data'
+    }
+    if (audioState === 'playing') {
+      return 'Stay in rhythm · jump with Space, click or tap'
+    }
+    return 'Audio paused · resume playback to sync obstacles'
+  })()
+
+  const isInMenu = hud.status === 'menu'
+  const isPaused = hud.status === 'paused'
+  const showStartOverlay = isInMenu || isPaused
+  const showHudPanels = hud.status === 'running' || hud.status === 'gameover'
+  const startOverlayPrimary = isPaused ? 'Tap to resume' : 'Tap to start'
+  const startOverlaySecondary = isPaused
+    ? 'Press Space or click to continue your route.'
+    : 'Press Space or click to launch the route.'
+  const startOverlayHint = 'Pause with Esc, right click, or a two-finger tap.'
 
   const telemetryItems = [
     {
@@ -984,6 +1019,14 @@ export function App() {
     <div className={classNames('flex flex-col gap-2 sm:flex-row', className)}>
       <button
         type="button"
+        onClick={handlePauseRun}
+        disabled={hud.status !== 'running'}
+        className="inline-flex items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        Pause run
+      </button>
+      <button
+        type="button"
         onClick={handleRestart}
         className="inline-flex items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/20"
       >
@@ -1035,24 +1078,43 @@ export function App() {
 
       />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
-          {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-          {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-          {renderRunActions('pointer-events-auto')}
-        </div>
-        <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:justify-between sm:text-sm">
-          <StatusMarquee
-            message={statusMessage}
-            prefersReducedMotion={prefersReducedMotion}
-            className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-200 sm:flex-1"
-            innerClassName="gap-12"
-          />
-          <p className="font-mono text-[0.8rem] text-slate-400 sm:text-xs">
-            Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
-          </p>
-        </div>
+        {showHudPanels ? (
+          <>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
+              {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
+              {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
+              {renderRunActions('pointer-events-auto')}
+            </div>
+            <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:justify-between sm:text-sm">
+              <StatusMarquee
+                message={statusMessage}
+                prefersReducedMotion={prefersReducedMotion}
+                className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-200 sm:flex-1"
+                innerClassName="gap-12"
+              />
+              <p className="font-mono text-[0.8rem] text-slate-400 sm:text-xs">
+                Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
+              </p>
+            </div>
+          </>
+        ) : null}
       </div>
+      {showStartOverlay ? (
+        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-slate-950/60 px-6 py-8 text-center backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleStartRun}
+            data-testid="start-overlay"
+            className="flex w-full max-w-md flex-col items-center gap-3 rounded-3xl border border-cyan-400/50 bg-slate-900/80 px-6 py-8 text-center text-slate-100 shadow-2xl shadow-cyan-500/20 transition hover:bg-slate-900/70 focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950"
+          >
+            <span className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">{isPaused ? 'Paused' : 'Ready'}</span>
+            <span className="text-2xl font-semibold text-slate-50 sm:text-3xl">{startOverlayPrimary}</span>
+            <span className="text-sm text-slate-300 sm:text-base">{startOverlaySecondary}</span>
+            <span className="text-xs text-slate-500">{startOverlayHint}</span>
+          </button>
+        </div>
+      ) : null}
     </section>
   )
 
