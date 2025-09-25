@@ -6,12 +6,15 @@ let mediaQueryList: MediaQueryList | null = null
 let mediaQueryHandler: ((event: MediaQueryListEvent) => void) | null = null
 const listeners = new Set<Listener>()
 let currentPreference = false
+let overridePreference: boolean | null = null
 
 const notifyListeners = (value: boolean) => {
   for (const listener of listeners) {
     listener(value)
   }
 }
+
+const resolvePreference = (): boolean => overridePreference ?? currentPreference
 
 const setupMediaQuery = () => {
   if (mediaQueryList || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -22,7 +25,7 @@ const setupMediaQuery = () => {
   currentPreference = query.matches
   const handler = (event: MediaQueryListEvent) => {
     currentPreference = event.matches
-    notifyListeners(currentPreference)
+    notifyListeners(resolvePreference())
   }
 
   if (typeof query.addEventListener === 'function') {
@@ -51,13 +54,13 @@ const teardownMediaQuery = () => {
 
 export const getPrefersReducedMotion = (): boolean => {
   setupMediaQuery()
-  return currentPreference
+  return resolvePreference()
 }
 
 export const subscribeToReducedMotion = (listener: Listener): (() => void) => {
   setupMediaQuery()
   listeners.add(listener)
-  listener(currentPreference)
+  listener(resolvePreference())
 
   return () => {
     listeners.delete(listener)
@@ -65,4 +68,9 @@ export const subscribeToReducedMotion = (listener: Listener): (() => void) => {
       teardownMediaQuery()
     }
   }
+}
+
+export const setReducedMotionOverride = (value: boolean | null): void => {
+  overridePreference = value
+  notifyListeners(resolvePreference())
 }

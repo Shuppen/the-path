@@ -5,6 +5,7 @@ import {
   type TrackDetails,
   type TrackMetadata,
 } from './data'
+import { PROCEDURAL_TRACKS } from './procedural'
 
 export interface AudioTrackManifestEntry {
   id: string
@@ -20,10 +21,17 @@ const SUPPORTED_EXTENSIONS = ['aac', 'flac', 'm4a', 'mp3', 'ogg', 'opus', 'wav',
 
 type AudioExtension = (typeof SUPPORTED_EXTENSIONS)[number]
 
-const TRACK_ASSET_URLS = import.meta.glob<string>(
+const publicAssetGlob = import.meta.glob<string>(
   '/tracks/*.{aac,flac,m4a,mp3,ogg,opus,wav,webm}',
   { eager: true, import: 'default' },
-) as Record<string, string>
+)
+
+const sourceAssetGlob = import.meta.glob<string>(
+  './audio/*.{aac,flac,m4a,mp3,ogg,opus,wav,webm}',
+  { eager: true, import: 'default' },
+)
+
+const TRACK_ASSET_URLS = { ...publicAssetGlob, ...sourceAssetGlob } as Record<string, string>
 
 const SOURCE_PRIORITY: readonly AudioExtension[] = ['mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'webm', 'flac']
 
@@ -62,7 +70,7 @@ const collectTrackAssets = (): TrackAssetEntry[] => {
   const assets = new Map<string, TrackAssetEntry>()
 
   for (const [path, url] of Object.entries(TRACK_ASSET_URLS)) {
-    const fileName = path.replace(/^\/tracks\//, '')
+    const fileName = path.replace(/^\/tracks\//, '').replace(/^\.\/audio\//, '')
     const decodedFileName = decodeURIComponent(fileName)
     const lastDotIndex = decodedFileName.lastIndexOf('.')
     if (lastDotIndex === -1) continue
@@ -107,7 +115,13 @@ const detailsById = TRACK_DETAILS as Record<string, TrackDetails>
 const preferredDefaultIds = TRACK_ORDER as readonly string[]
 
 const buildTrackManifest = (): AudioTrackManifestEntry[] => {
-  const manifest: AudioTrackManifestEntry[] = []
+  const manifest = new Map<string, AudioTrackManifestEntry>()
+
+  const addEntry = (entry: AudioTrackManifestEntry) => {
+    if (!manifest.has(entry.id)) {
+      manifest.set(entry.id, entry)
+    }
+  }
 
   for (const asset of collectTrackAssets()) {
     const src = pickPreferredSource(asset.sources)
@@ -129,7 +143,28 @@ const buildTrackManifest = (): AudioTrackManifestEntry[] => {
       entry.description = details.description
     }
 
-    manifest.push(entry)
+    addEntry(entry)
+  }
+
+  for (const track of PROCEDURAL_TRACKS) {
+    const metadata = metadataById[track.id]
+    const details = detailsById[track.id]
+
+    const entry: AudioTrackManifestEntry = {
+      id: track.id,
+      title: details?.title ?? track.title,
+      artist: details?.artist ?? track.artist,
+      duration: metadata?.duration ?? track.duration,
+      bpm: metadata?.bpm ?? track.bpm,
+      src: track.src,
+    }
+
+    const description = details?.description ?? track.description
+    if (description) {
+      entry.description = description
+    }
+
+    addEntry(entry)
   }
 
   const orderWeight = (id: string): number => {
@@ -137,7 +172,8 @@ const buildTrackManifest = (): AudioTrackManifestEntry[] => {
     return index === -1 ? preferredDefaultIds.length : index
   }
 
-  manifest.sort((a, b) => {
+  const manifestEntries = Array.from(manifest.values())
+  manifestEntries.sort((a, b) => {
     const weightDelta = orderWeight(a.id) - orderWeight(b.id)
     if (weightDelta !== 0) {
       return weightDelta
@@ -146,7 +182,7 @@ const buildTrackManifest = (): AudioTrackManifestEntry[] => {
     return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
   })
 
-  return manifest
+  return manifestEntries
 }
 
 const manifest = buildTrackManifest()

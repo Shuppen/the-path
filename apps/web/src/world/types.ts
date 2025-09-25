@@ -1,45 +1,49 @@
-import type { Vector2 } from '@the-path/types'
-
 export type WorldStatus = 'menu' | 'running' | 'paused' | 'gameover'
+
+export type LaneIndex = 0 | 1 | 2 | 3
+
+export type Judgement = 'perfect' | 'good' | 'miss'
 
 export interface StageMetrics {
   width: number
   height: number
-  groundY: number
-  groundHeight: number
+  hitLineY: number
+  laneWidth: number
+  lanePadding: number
+  laneCount: number
+  scrollSpeed: number
 }
 
-export interface PlayerState {
-  position: Vector2
-  velocity: Vector2
-  width: number
-  height: number
-  onGround: boolean
-  coyoteTimer: number
-  jumpBufferTimer: number
-  alive: boolean
-}
-
-export type ObstacleKind = 'pulse' | 'spire' | 'block'
-
-export interface ObstacleState {
+export interface LaneNote {
   id: number
-  kind: ObstacleKind
-  position: Vector2
-  width: number
-  height: number
-  speedFactor: number
-  passed: boolean
-  beatIndex: number
+  lane: LaneIndex
+  time: number
+  judgement?: Judgement
+  judged: boolean
+  hitTime?: number
 }
 
-export interface FlashEffect {
+export interface NoteFeedback {
   id: number
-  position: Vector2
-  radius: number
-  life: number
-  age: number
-  strength: number
+  judgement: Judgement
+  createdAt: number
+  x: number
+  y: number
+}
+
+export interface RunnerState {
+  lane: LaneIndex
+  targetLane: LaneIndex
+  position: number
+  transitionFrom: number
+  transitionStart: number
+  transitionDuration: number
+  combo: number
+  bestCombo: number
+  score: number
+  perfectHits: number
+  goodHits: number
+  missHits: number
 }
 
 export interface WorldState {
@@ -48,13 +52,11 @@ export interface WorldState {
   beat: number
   status: WorldStatus
   stage: StageMetrics
-  player: PlayerState
-  obstacles: ObstacleState[]
-  flashes: FlashEffect[]
-  score: number
-  combo: number
-  bestCombo: number
-  pointer?: Vector2
+  lanes: { count: number }
+  notes: LaneNote[]
+  runner: RunnerState
+  feedback: NoteFeedback[]
+  accuracy: number
 }
 
 export interface WorldSnapshot {
@@ -63,6 +65,7 @@ export interface WorldSnapshot {
   bestCombo: number
   status: WorldStatus
   seed: string
-  sessionBestScore: number
-  personalBestScore: number
+  accuracy: number
+  hits: number
+  misses: number
 }

@@ -1,257 +1,168 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { WorldState } from '../world'
+import type { LaneNote, WorldState } from '../world'
 
-const createPatternStub = (name: string) => ({
-  __patternName: name,
-  setTransform: vi.fn(),
-}) as unknown as CanvasPattern & { __patternName: string }
+const operations: string[] = []
 
-const patternMap: Record<
-  'background' | 'ground' | 'obstacle-spire' | 'obstacle-pulse' | 'obstacle-block',
-  CanvasPattern & { __patternName: string }
-> = {
-  background: createPatternStub('background'),
-  ground: createPatternStub('ground'),
-  'obstacle-spire': createPatternStub('obstacle-spire'),
-  'obstacle-pulse': createPatternStub('obstacle-pulse'),
-  'obstacle-block': createPatternStub('obstacle-block'),
+const record = (value: string) => {
+  operations.push(value)
 }
 
-const playerImage = (() => {
-  const image = document.createElement('img')
-  image.width = 64
-  image.height = 96
-  return image
-})()
-
-vi.mock('./textures', () => ({
-  __esModule: true,
-  getTexturePattern: vi.fn(
-    (_ctx: CanvasRenderingContext2D, key: keyof typeof patternMap) => patternMap[key] ?? undefined
-  ),
-  getTextureImage: vi.fn((key: string) => (key === 'player' ? playerImage : undefined)),
-  primeTexture: vi.fn(),
+vi.mock('../environment/reducedMotion', () => ({
+  subscribeToReducedMotion: vi.fn((listener: (value: boolean) => void) => {
+    listener(false)
+    return () => {}
+  }),
 }))
 
-const describeFill = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value
+const createGradient = (kind: 'linear' | 'radial', coords: number[]) => {
+  const gradient = {
+    addColorStop: vi.fn((offset: number, color: string) => {
+      record(`${kind}-stop ${offset.toFixed(2)} ${color}`)
+    }),
   }
-
-  if (value && typeof value === 'object') {
-    const patternName = (value as { __patternName?: string }).__patternName
-    if (patternName) {
-      return `pattern:${patternName}`
-    }
-
-    const meta = (value as { __meta?: GradientMeta }).__meta
-    if (meta) {
-      const coords = meta.coords.map((coord) => Number(coord).toFixed(2)).join(',')
-      const stops = meta.stops
-        .map((stop) => `${stop.offset.toFixed(2)}:${stop.color}`)
-        .join('|')
-      return `gradient:${meta.kind}(${coords})[${stops}]`
-    }
-  }
-
-  return 'unknown'
+  record(`${kind}-gradient ${coords.map((value) => value.toFixed(1)).join(',')}`)
+  return gradient as unknown as CanvasGradient
 }
 
-interface GradientMeta {
-  kind: 'linear' | 'radial'
-  coords: number[]
-  stops: Array<{ offset: number; color: string }>
-}
-
-const createGradient = (kind: GradientMeta['kind'], coords: number[]) => {
-  const meta: GradientMeta = {
-    kind,
-    coords,
-    stops: [],
-  }
-
-  return {
-    addColorStop(offset: number, color: string) {
-      meta.stops.push({ offset, color })
-    },
-    __meta: meta,
-  } as unknown as CanvasGradient & { __meta: GradientMeta }
-}
-
-const createRecordingContext = () => {
+const createRecordingContext = (): CanvasRenderingContext2D => {
   const canvas = document.createElement('canvas')
-  canvas.width = 800
-  canvas.height = 600
-
-  const operations: string[] = []
-
-  const record = (value: string) => {
-    operations.push(value)
-  }
-
-  let fillStyleValue: unknown
-  let strokeStyleValue: unknown = 'black'
-  let lineWidthValue = 1
-  let globalAlphaValue = 1
+  canvas.width = 720
+  canvas.height = 1280
 
   const context: Partial<CanvasRenderingContext2D> = {
     canvas,
     clearRect: (x: number, y: number, w: number, h: number) => record(`clearRect ${x} ${y} ${w} ${h}`),
     createLinearGradient: (...coords: number[]) => createGradient('linear', coords),
     createRadialGradient: (...coords: number[]) => createGradient('radial', coords),
-    createPattern: vi.fn(() => null),
     fillRect: (x: number, y: number, w: number, h: number) =>
-      record(`fillRect ${x} ${y} ${w} ${h} style=${describeFill(fillStyleValue)}`),
+      record(`fillRect ${x.toFixed(1)} ${y.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} style=${currentFill}`),
     beginPath: () => record('beginPath'),
-    moveTo: (x: number, y: number) => record(`moveTo ${x} ${y}`),
-    lineTo: (x: number, y: number) => record(`lineTo ${x} ${y}`),
+    moveTo: (x: number, y: number) => record(`moveTo ${x.toFixed(1)} ${y.toFixed(1)}`),
+    lineTo: (x: number, y: number) => record(`lineTo ${x.toFixed(1)} ${y.toFixed(1)}`),
+    quadraticCurveTo: (cpx: number, cpy: number, x: number, y: number) =>
+      record(
+        `quadraticCurveTo ${cpx.toFixed(1)} ${cpy.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)} style=${currentFill}`,
+      ),
+    stroke: () => record(`stroke style=${currentStroke} width=${lineWidth.toFixed(1)}`),
     closePath: () => record('closePath'),
-    stroke: () => record(`stroke style=${strokeStyleValue} width=${lineWidthValue}`),
-    fill: () => record(`fill style=${describeFill(fillStyleValue)}`),
+    fill: () => record(`fill style=${currentFill}`),
     save: () => record('save'),
     restore: () => record('restore'),
-    translate: (x: number, y: number) => record(`translate ${x} ${y}`),
-    arc: vi.fn(),
-    ellipse: vi.fn(),
-    roundRect: (x: number, y: number, w: number, h: number, r?: number) =>
-      record(`roundRect ${x} ${y} ${w} ${h} ${r ?? 0}`),
-    rect: (x: number, y: number, w: number, h: number) => record(`rect ${x} ${y} ${w} ${h}`),
-    fillText: vi.fn(),
-    drawImage: ((_image: CanvasImageSource, ...args: number[]) => {
-      let dx = 0
-      let dy = 0
-      let dw = 0
-      let dh = 0
-
-      if (args.length === 2) {
-        ;[dx, dy] = args
-      } else if (args.length === 4) {
-        ;[dx, dy, dw, dh] = args
-      } else if (args.length >= 6) {
-        dx = args[4] ?? 0
-        dy = args[5] ?? 0
-        dw = args[6] ?? 0
-        dh = args[7] ?? 0
-      }
-
-      record(`drawImage ${dx} ${dy} ${dw} ${dh}`)
-    }) as CanvasRenderingContext2D['drawImage'],
+    arc: (x: number, y: number, radius: number) =>
+      record(`arc ${x.toFixed(1)} ${y.toFixed(1)} ${radius.toFixed(1)} style=${currentFill} alpha=${globalAlpha.toFixed(2)}`),
+    ellipse: (x: number, y: number, rx: number, ry: number) =>
+      record(`ellipse ${x.toFixed(1)} ${y.toFixed(1)} ${rx.toFixed(1)} ${ry.toFixed(1)} style=${currentFill}`),
   }
 
+  let currentFill = '#000'
+  let currentStroke = '#000'
+  let lineWidth = 1
+  let globalAlpha = 1
+
   Object.defineProperty(context, 'fillStyle', {
-    get: () => fillStyleValue,
+    get: () => currentFill,
     set: (value) => {
-      fillStyleValue = value
-      record(`set fillStyle ${describeFill(value)}`)
+      currentFill = String(value)
+      record(`set fillStyle ${currentFill}`)
     },
   })
 
   Object.defineProperty(context, 'strokeStyle', {
-    get: () => strokeStyleValue,
+    get: () => currentStroke,
     set: (value) => {
-      strokeStyleValue = value
-      record(`set strokeStyle ${value}`)
+      currentStroke = String(value)
+      record(`set strokeStyle ${currentStroke}`)
     },
   })
 
   Object.defineProperty(context, 'lineWidth', {
-    get: () => lineWidthValue,
+    get: () => lineWidth,
     set: (value) => {
-      lineWidthValue = value
-      record(`set lineWidth ${value}`)
+      lineWidth = value
+      record(`set lineWidth ${lineWidth.toFixed(1)}`)
     },
   })
 
   Object.defineProperty(context, 'globalAlpha', {
-    get: () => globalAlphaValue,
+    get: () => globalAlpha,
     set: (value) => {
-      globalAlphaValue = value
-      record(`set globalAlpha ${value}`)
+      globalAlpha = value
+      record(`set globalAlpha ${globalAlpha.toFixed(2)}`)
     },
   })
 
-  Object.defineProperty(context, 'font', {
-    get: () => '',
-    set: (value) => record(`set font ${value}`),
-  })
-
-  Object.defineProperty(context, 'textAlign', {
-    get: () => 'left',
-    set: (value) => record(`set textAlign ${value}`),
-  })
-
-  Object.defineProperty(context, 'textBaseline', {
-    get: () => 'alphabetic',
-    set: (value) => record(`set textBaseline ${value}`),
-  })
-
-  return { context: context as CanvasRenderingContext2D, operations }
+  return context as CanvasRenderingContext2D
 }
 
-const createStateWithTextures = (): WorldState => ({
-  seed: 'visual',
-  time: 0,
-  beat: 0,
-  status: 'running',
-  stage: { width: 800, height: 600, groundHeight: 100, groundY: 500 },
-  player: {
-    position: { x: 120, y: 380 },
-    velocity: { x: 0, y: 0 },
-    width: 48,
-    height: 72,
-    onGround: false,
-    coyoteTimer: 0,
-    jumpBufferTimer: 0,
-    alive: true,
-  },
-  obstacles: [
-    {
-      id: 1,
-      kind: 'spire',
-      position: { x: 240, y: 340 },
-      width: 50,
-      height: 120,
-      speedFactor: 1,
-      passed: false,
-      beatIndex: 0,
-    },
-    {
-      id: 2,
-      kind: 'pulse',
-      position: { x: 360, y: 360 },
-      width: 60,
-      height: 90,
-      speedFactor: 1,
-      passed: true,
-      beatIndex: 1,
-    },
-    {
-      id: 3,
-      kind: 'block',
-      position: { x: 500, y: 320 },
-      width: 80,
-      height: 140,
-      speedFactor: 1,
-      passed: false,
-      beatIndex: 2,
-    },
-  ],
-  flashes: [],
-  score: 0,
-  combo: 0,
-  bestCombo: 0,
+const laneWidth = (720 - 48) / 4
+const hitLineY = 1280 * (1 - 0.12 * 0.5)
+
+let noteId = 0
+
+const createNote = (overrides: Partial<LaneNote>): LaneNote => ({
+  id: overrides.id ?? (noteId += 1),
+  lane: overrides.lane ?? 0,
+  time: overrides.time ?? 0,
+  judged: overrides.judged ?? false,
+  judgement: overrides.judgement,
+  hitTime: overrides.hitTime,
 })
+
+const createState = (): WorldState => {
+  // ensure deterministic ids for each state instantiation
+  noteId = 0
+  return {
+    seed: 'visual',
+    time: 42.4,
+    beat: 120,
+    status: 'running',
+    stage: {
+      width: 720,
+      height: 1280,
+      hitLineY,
+      laneWidth,
+      lanePadding: 24,
+      laneCount: 4,
+      scrollSpeed: 720,
+    },
+    lanes: { count: 4 },
+    notes: [
+      createNote({ id: 1, lane: 0, time: 42.65 }),
+      createNote({ id: 2, lane: 1, time: 42.36, judged: true, judgement: 'perfect', hitTime: 42.36 }),
+      createNote({ id: 3, lane: 2, time: 41.98 }),
+    ],
+    runner: {
+      lane: 1,
+      targetLane: 2,
+      position: 1.4,
+      transitionFrom: 1,
+      transitionStart: 42.2,
+      transitionDuration: 0.15,
+      combo: 18,
+      bestCombo: 30,
+      score: 98200,
+      perfectHits: 40,
+      goodHits: 6,
+      missHits: 2,
+    },
+    feedback: [
+      { id: 1, judgement: 'perfect', createdAt: 42.1, x: 24 + laneWidth * 1.5, y: hitLineY },
+      { id: 2, judgement: 'miss', createdAt: 41.9, x: 24 + laneWidth * 2.5, y: hitLineY },
+    ],
+    accuracy: 0.94,
+  }
+}
 
 const { SceneRenderer } = await import('./sceneRenderer')
 
-describe('SceneRenderer textures', () => {
-  it('applies texture fills and sprite drawing when assets are available', () => {
-    const { context, operations } = createRecordingContext()
-    const renderer = new SceneRenderer(context)
-    const state = createStateWithTextures()
+describe('SceneRenderer visual output', () => {
+  it('records drawing operations for snapshot comparison', () => {
+    operations.length = 0
+    const ctx = createRecordingContext()
+    const renderer = new SceneRenderer(ctx)
 
-    renderer.render(state)
+    renderer.render(createState())
 
     expect(operations).toMatchSnapshot()
   })
