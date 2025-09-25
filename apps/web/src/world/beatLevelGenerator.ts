@@ -63,7 +63,7 @@ export class BeatLevelGenerator {
   }
 
   private createNote(time: number): LaneNote {
-    let lane: LaneIndex = this.pickLane()
+    const lane: LaneIndex = this.pickLane()
     this.lastLane = lane
     return {
       id: (this.noteId += 1),
