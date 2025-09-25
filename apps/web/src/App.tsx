@@ -16,7 +16,6 @@ import {
   type StoredRecentTrack,
 } from './audio/recentTracks'
 import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
-import { createSeed } from './core/prng'
 import { getPrefersReducedMotion, setReducedMotionOverride } from './environment/reducedMotion'
 import type { WorldSnapshot } from './world'
 

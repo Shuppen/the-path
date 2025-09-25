@@ -146,11 +146,9 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
     const loop = createGameLoop(
       {
         update: (dt) => {
-          if (!worldRef.current) return
+          const world = worldRef.current
+          if (!world) return
           const frame = input.consumeFrame()
-          if (paused) {
-            return
-          }
           world.update({ frame, dt })
           updateHudFromWorld(world)
         },
@@ -232,11 +230,15 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
   const handlePauseToggle = useCallback(() => {
     if (paused) {
       setPaused(false)
-      worldRef.current?.state && (worldRef.current.state.status = 'running')
+      if (worldRef.current?.state) {
+        worldRef.current.state.status = 'running'
+      }
       audio.play().catch(() => undefined)
     } else {
       setPaused(true)
-      worldRef.current?.state && (worldRef.current.state.status = 'paused')
+      if (worldRef.current?.state) {
+        worldRef.current.state.status = 'paused'
+      }
       audio.pause()
     }
   }, [audio, paused])

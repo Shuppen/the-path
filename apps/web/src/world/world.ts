@@ -33,11 +33,18 @@ const clampLane = (lane: number): LaneIndex => {
   return lane as LaneIndex
 }
 
+const clamp01 = (value: number): number => {
+  if (value <= 0) return 0
+  if (value >= 1) return 1
+  return value
+}
+
 const createStageMetrics = (width: number, height: number): StageMetrics => {
   const lanePadding = Math.max(12, Math.min(width * 0.04, 32))
   const availableWidth = Math.max(0, width - lanePadding * 2)
   const laneWidth = availableWidth / LANE_COUNT
   const hitLineY = height * (1 - HITBAR_HEIGHT_RATIO * 0.5)
+
   return {
     width,
     height,
@@ -47,22 +54,12 @@ const createStageMetrics = (width: number, height: number): StageMetrics => {
     laneCount: LANE_COUNT,
     scrollSpeed: BASE_SCROLL_SPEED,
   }
-
-}
-
-const clamp01 = (value: number): number => {
-  if (value <= 0) return 0
-  if (value >= 1) return 1
-  return value
-
 }
 
 const createRunnerState = (): RunnerState => ({
   lane: 1,
   targetLane: 1,
-
   position: 1,
-
   transitionFrom: 1,
   transitionStart: 0,
   transitionDuration: 0,
@@ -208,8 +205,7 @@ export class World {
       return
     }
 
-    const isPerfect = judgement === 'perfect'
-    if (isPerfect) {
+    if (judgement === 'perfect') {
       runner.perfectHits += 1
       runner.score += PERFECT_SCORE
     } else {
@@ -223,12 +219,12 @@ export class World {
     this.updateAccuracy()
   }
 
-
   private judgeLane(lane: LaneIndex, currentTime: number): Judgement | null {
     const activeLane = this.state.runner.targetLane
     if (lane !== activeLane) {
       return null
     }
+
     const upcoming = this.state.notes.find((note) => !note.judged && note.lane === lane)
     if (!upcoming) {
       return null
@@ -236,7 +232,6 @@ export class World {
 
     const delta = currentTime - upcoming.time
     if (delta < -GOOD_WINDOW) {
-      // Too early
       return null
     }
 
@@ -269,28 +264,19 @@ export class World {
     return runner.transitionFrom + (runner.targetLane - runner.transitionFrom) * normalized
   }
 
-  private switchLane(direction: SwipeDirection | null): void {
-    if (!direction) return
+  private beginLaneTransition(target: LaneIndex): void {
     const runner = this.state.runner
     const currentPosition = this.evaluateRunnerPosition(this.state.time)
     runner.position = currentPosition
     runner.lane = clampLane(Math.round(currentPosition))
 
-    let target = runner.targetLane
-    if (direction === 'left') {
-      target -= 1
-    } else if (direction === 'right') {
-      target += 1
-    } else {
-      return
-    }
-
-    target = clampLane(target)
     if (target === runner.targetLane) {
-      runner.transitionDuration = 0
       runner.transitionFrom = runner.targetLane
+      runner.transitionDuration = 0
       runner.position = runner.targetLane
       runner.lane = runner.targetLane
+      return
+    }
 
     const duration = this.prng.nextRange(LANE_SWITCH_MIN_DURATION, LANE_SWITCH_MAX_DURATION)
     runner.transitionFrom = runner.lane
@@ -299,24 +285,24 @@ export class World {
     runner.transitionDuration = duration
   }
 
-  private updateLaneTransition(): void {
-    const runner = this.state.runner
-    if (runner.lane === runner.targetLane) return
-    const elapsed = this.state.time - runner.transitionStart
-    if (elapsed >= runner.transitionDuration) {
-      runner.lane = runner.targetLane
-      runner.transitionDuration = 0
+  private switchLane(direction: SwipeDirection | null): void {
+    if (!direction) return
+    if (direction !== 'left' && direction !== 'right') return
 
-      return
+    const runner = this.state.runner
+    const currentPosition = this.evaluateRunnerPosition(this.state.time)
+    runner.position = currentPosition
+    runner.lane = clampLane(Math.round(currentPosition))
+
+    let target = runner.targetLane
+    if (direction === 'left') {
+      target = clampLane(target - 1)
+    } else if (direction === 'right') {
+      target = clampLane(target + 1)
     }
 
-    const duration = this.prng.nextRange(LANE_SWITCH_MIN_DURATION, LANE_SWITCH_MAX_DURATION)
-    runner.transitionFrom = currentPosition
-    runner.targetLane = target
-    runner.transitionStart = this.state.time
-    runner.transitionDuration = duration
+    this.beginLaneTransition(target)
   }
-
 
   private updateLaneTransition(): void {
     const runner = this.state.runner
@@ -326,57 +312,20 @@ export class World {
 
     if (runner.transitionDuration <= 0) {
       runner.transitionFrom = runner.targetLane
-      runner.transitionDuration = 0
-      runner.lane = runner.targetLane
+      runner.transitionStart = this.state.time
       runner.position = runner.targetLane
+      runner.lane = runner.targetLane
       return
     }
 
     const elapsed = this.state.time - runner.transitionStart
     if (elapsed >= runner.transitionDuration) {
-      runner.lane = runner.targetLane
-      runner.position = runner.targetLane
-      runner.transitionFrom = runner.targetLane
       runner.transitionDuration = 0
-      return
-
-  private updateNotes(currentTime: number): void {
-    for (const note of this.state.notes) {
-      if (!note.judged && currentTime - note.time > GOOD_WINDOW) {
-        this.markJudgement(note, 'miss', note.time)
-      }
+      runner.transitionFrom = runner.targetLane
+      runner.position = runner.targetLane
+      runner.lane = runner.targetLane
     }
-
-    const pruneBefore = currentTime - NOTE_PRELOAD_TIME * 1.2
-    this.state.notes = this.state.notes.filter((note) => note.time >= pruneBefore)
   }
-
-  update(input: WorldUpdateInput): void {
-    const currentStatus: WorldStatus = this.state.status
-
-    if (currentStatus !== 'running') {
-      if (currentStatus === 'gameover' && this.pendingReset) {
-        this.pendingReset = false
-        this.state.status = 'menu'
-      }
-      return
-    }
-
-    const nextTime = this.getCurrentTime(input.dt)
-    const dt = Math.max(0, nextTime - this.state.time)
-    this.state.time += dt
-
-    const frame: InputFrame = input.frame ?? { tapLane: null, swipe: null }
-    this.switchLane(frame.swipe)
-
-    this.generator.update(this.state, NOTE_PRELOAD_TIME)
-    this.updateNotes(this.state.time)
-
-    if (frame.tapLane !== null) {
-      this.judgeLane(clampLane(frame.tapLane), this.state.time)
-
-    }
-
 
   private updateNotes(currentTime: number): void {
     for (const note of this.state.notes) {
@@ -436,4 +385,4 @@ export class World {
   getSessionBest(): number {
     return this.sessionBestScore
   }
-
+}
