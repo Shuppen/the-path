@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import CanvasRecorder, { type RecorderState } from './CanvasRecorder'
 
-type MutableGlobal = typeof globalThis & {
+type MutableGlobal = Omit<typeof globalThis, 'MediaRecorder' | 'MediaStream'> & {
   MediaRecorder?: typeof MediaRecorder
   MediaStream?: typeof MediaStream
 }
@@ -9,6 +9,8 @@ type MutableGlobal = typeof globalThis & {
 const mutableGlobal = globalThis as MutableGlobal
 const originalMediaRecorder = mutableGlobal.MediaRecorder
 const originalMediaStream = mutableGlobal.MediaStream
+const hadMediaRecorder = Object.prototype.hasOwnProperty.call(globalThis, 'MediaRecorder')
+const hadMediaStream = Object.prototype.hasOwnProperty.call(globalThis, 'MediaStream')
 
 class FakeMediaStream {
   private readonly tracks: MediaStreamTrack[]
@@ -82,12 +84,12 @@ describe('CanvasRecorder', () => {
   })
 
   afterEach(() => {
-    if (originalMediaStream) {
+    if (hadMediaStream) {
       mutableGlobal.MediaStream = originalMediaStream
     } else {
       Reflect.deleteProperty(mutableGlobal, 'MediaStream')
     }
-    if (originalMediaRecorder) {
+    if (hadMediaRecorder) {
       mutableGlobal.MediaRecorder = originalMediaRecorder
     } else {
       Reflect.deleteProperty(mutableGlobal, 'MediaRecorder')

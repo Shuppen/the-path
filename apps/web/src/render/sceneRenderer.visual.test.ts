@@ -100,7 +100,7 @@ const createRecordingContext = () => {
     clearRect: (x: number, y: number, w: number, h: number) => record(`clearRect ${x} ${y} ${w} ${h}`),
     createLinearGradient: (...coords: number[]) => createGradient('linear', coords),
     createRadialGradient: (...coords: number[]) => createGradient('radial', coords),
-    createPattern: vi.fn(() => undefined),
+    createPattern: vi.fn(() => null),
     fillRect: (x: number, y: number, w: number, h: number) =>
       record(`fillRect ${x} ${y} ${w} ${h} style=${describeFill(fillStyleValue)}`),
     beginPath: () => record('beginPath'),
@@ -118,8 +118,25 @@ const createRecordingContext = () => {
       record(`roundRect ${x} ${y} ${w} ${h} ${r ?? 0}`),
     rect: (x: number, y: number, w: number, h: number) => record(`rect ${x} ${y} ${w} ${h}`),
     fillText: vi.fn(),
-    drawImage: (_image: CanvasImageSource, dx: number, dy: number, dw: number, dh: number) =>
-      record(`drawImage ${dx} ${dy} ${dw} ${dh}`),
+    drawImage: ((_image: CanvasImageSource, ...args: number[]) => {
+      let dx = 0
+      let dy = 0
+      let dw = 0
+      let dh = 0
+
+      if (args.length === 2) {
+        ;[dx, dy] = args
+      } else if (args.length === 4) {
+        ;[dx, dy, dw, dh] = args
+      } else if (args.length >= 6) {
+        dx = args[4] ?? 0
+        dy = args[5] ?? 0
+        dw = args[6] ?? 0
+        dh = args[7] ?? 0
+      }
+
+      record(`drawImage ${dx} ${dy} ${dw} ${dh}`)
+    }) as CanvasRenderingContext2D['drawImage'],
   }
 
   Object.defineProperty(context, 'fillStyle', {
