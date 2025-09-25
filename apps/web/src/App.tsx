@@ -16,7 +16,7 @@ import TrackUpload from './ui/TrackUpload'
 import { LeadersBoard } from './ui/LeadersBoard'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 import useMediaQuery from './hooks/useMediaQuery'
-import { validateAudioDuration } from './audio/uploadValidation'
+import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import {
   type StoredRecentTrack,
   MAX_RECENT_TRACKS,
@@ -246,7 +246,7 @@ export function App() {
         const durationError = validateAudioDuration(duration)
         if (durationError) {
           audio.removeCustomTrack(id)
-          setUploadError(durationError)
+          setUploadError(formatValidationErrorMessage(durationError, file.name))
           return
         }
 
