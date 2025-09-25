@@ -4,21 +4,9 @@ export const ACCEPTED_MIME_TYPES = new Set<string>([
   'audio/ogg',
   'audio/wav',
   'audio/x-wav',
-  'audio/webm',
-  'audio/aac',
-  'audio/mp4',
-  'audio/flac',
 ])
 
-export const ACCEPTED_EXTENSIONS = new Set<string>([
-  'mp3',
-  'ogg',
-  'wav',
-  'webm',
-  'aac',
-  'm4a',
-  'flac',
-])
+export const ACCEPTED_EXTENSIONS = new Set<string>(['mp3', 'ogg', 'wav'])
 
 export const MIN_AUDIO_DURATION_SECONDS = 5
 export const MAX_AUDIO_DURATION_SECONDS = 600
@@ -28,7 +16,7 @@ const normalizeExtension = (fileName: string): string => {
   return match ? match[1].toLowerCase() : ''
 }
 
-export const describeAcceptedFormats = (): string => 'MP3, WAV, OGG, AAC, FLAC или WebM'
+export const describeAcceptedFormats = (): string => 'MP3, WAV или OGG'
 
 export const FILE_NAME_PLACEHOLDER = '{fileName}'
 
