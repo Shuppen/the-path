@@ -11,7 +11,9 @@ const createWorld = () => {
   world.state.time = 1
   world.state.runner.lane = 1
   world.state.runner.targetLane = 1
+
   world.state.runner.position = 1
+
   ;(world as unknown as { generator: { update: (state: unknown, lead: number) => void } }).generator.update = () => {}
   return world
 }
@@ -79,7 +81,9 @@ describe('World lane switching', () => {
 
     expect(world.state.runner.targetLane).toBe(0)
     expect(world.state.runner.transitionDuration).toBe(0)
+
     expect(world.state.runner.position).toBe(0)
+
   })
 
   it('moves the runner right with an eased transition', () => {
@@ -91,6 +95,8 @@ describe('World lane switching', () => {
     expect(world.state.runner.transitionFrom).toBe(1)
     expect(world.state.runner.transitionDuration).toBeGreaterThanOrEqual(LANE_SWITCH_MIN_DURATION)
     expect(world.state.runner.transitionDuration).toBeLessThanOrEqual(LANE_SWITCH_MAX_DURATION)
+
     expect(world.state.runner.position).toBeCloseTo(1)
+
   })
 })

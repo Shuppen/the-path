@@ -47,18 +47,22 @@ const createStageMetrics = (width: number, height: number): StageMetrics => {
     laneCount: LANE_COUNT,
     scrollSpeed: BASE_SCROLL_SPEED,
   }
+
 }
 
 const clamp01 = (value: number): number => {
   if (value <= 0) return 0
   if (value >= 1) return 1
   return value
+
 }
 
 const createRunnerState = (): RunnerState => ({
   lane: 1,
   targetLane: 1,
+
   position: 1,
+
   transitionFrom: 1,
   transitionStart: 0,
   transitionDuration: 0,
@@ -219,6 +223,7 @@ export class World {
     this.updateAccuracy()
   }
 
+
   private judgeLane(lane: LaneIndex, currentTime: number): Judgement | null {
     const activeLane = this.state.runner.targetLane
     if (lane !== activeLane) {
@@ -286,6 +291,22 @@ export class World {
       runner.transitionFrom = runner.targetLane
       runner.position = runner.targetLane
       runner.lane = runner.targetLane
+
+    const duration = this.prng.nextRange(LANE_SWITCH_MIN_DURATION, LANE_SWITCH_MAX_DURATION)
+    runner.transitionFrom = runner.lane
+    runner.targetLane = target
+    runner.transitionStart = this.state.time
+    runner.transitionDuration = duration
+  }
+
+  private updateLaneTransition(): void {
+    const runner = this.state.runner
+    if (runner.lane === runner.targetLane) return
+    const elapsed = this.state.time - runner.transitionStart
+    if (elapsed >= runner.transitionDuration) {
+      runner.lane = runner.targetLane
+      runner.transitionDuration = 0
+
       return
     }
 
@@ -295,6 +316,7 @@ export class World {
     runner.transitionStart = this.state.time
     runner.transitionDuration = duration
   }
+
 
   private updateLaneTransition(): void {
     const runner = this.state.runner
@@ -317,8 +339,44 @@ export class World {
       runner.transitionFrom = runner.targetLane
       runner.transitionDuration = 0
       return
+
+  private updateNotes(currentTime: number): void {
+    for (const note of this.state.notes) {
+      if (!note.judged && currentTime - note.time > GOOD_WINDOW) {
+        this.markJudgement(note, 'miss', note.time)
+      }
     }
+
+    const pruneBefore = currentTime - NOTE_PRELOAD_TIME * 1.2
+    this.state.notes = this.state.notes.filter((note) => note.time >= pruneBefore)
   }
+
+  update(input: WorldUpdateInput): void {
+    const currentStatus: WorldStatus = this.state.status
+
+    if (currentStatus !== 'running') {
+      if (currentStatus === 'gameover' && this.pendingReset) {
+        this.pendingReset = false
+        this.state.status = 'menu'
+      }
+      return
+    }
+
+    const nextTime = this.getCurrentTime(input.dt)
+    const dt = Math.max(0, nextTime - this.state.time)
+    this.state.time += dt
+
+    const frame: InputFrame = input.frame ?? { tapLane: null, swipe: null }
+    this.switchLane(frame.swipe)
+
+    this.generator.update(this.state, NOTE_PRELOAD_TIME)
+    this.updateNotes(this.state.time)
+
+    if (frame.tapLane !== null) {
+      this.judgeLane(clampLane(frame.tapLane), this.state.time)
+
+    }
+
 
   private updateNotes(currentTime: number): void {
     for (const note of this.state.notes) {
@@ -379,7 +437,3 @@ export class World {
     return this.sessionBestScore
   }
 
-  getPersonalBest(): number {
-    return this.personalBest.score
-  }
-}
