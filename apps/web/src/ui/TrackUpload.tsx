@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   describeAcceptedFormats,
+  FILE_INPUT_ACCEPT,
   formatValidationErrorMessage,
   validateAudioFileType,
 } from '../audio/uploadValidation'
@@ -109,7 +110,7 @@ export function TrackUpload({
       <input
         ref={inputRef}
         type="file"
-        accept=".ogg,.mp3,.wav"
+        accept={FILE_INPUT_ACCEPT}
         tabIndex={-1}
         className="hidden"
         onChange={(event) => handleFiles(event.target.files)}
