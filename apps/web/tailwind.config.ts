@@ -16,6 +16,10 @@ export default {
       boxShadow: {
         focus: '0 0 0 4px rgba(56, 189, 248, 0.35)',
       },
+      aspectRatio: {
+        'hero-video': '16 / 9',
+        'hero-video-wide': '18 / 9',
+      },
     },
   },
   plugins: [],

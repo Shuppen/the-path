@@ -1,6 +1,6 @@
 import type { Vector2 } from '@the-path/types'
 
-export type WorldStatus = 'running' | 'gameover'
+export type WorldStatus = 'menu' | 'running' | 'paused' | 'gameover'
 
 export interface StageMetrics {
   width: number

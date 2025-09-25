@@ -16,7 +16,7 @@ import TrackUpload from './ui/TrackUpload'
 import { LeadersBoard } from './ui/LeadersBoard'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 import useMediaQuery from './hooks/useMediaQuery'
-import { validateAudioDuration } from './audio/uploadValidation'
+import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import {
   type StoredRecentTrack,
   MAX_RECENT_TRACKS,
@@ -86,34 +86,74 @@ interface StatusMarqueeProps {
   innerClassName?: string
 }
 
-const StatusMarquee = ({
+export const StatusMarquee = ({
   message,
   prefersReducedMotion,
   className,
   innerClassName,
-}: StatusMarqueeProps) => (
-  <div className={classNames('relative overflow-hidden', className)}>
-    <div
-      className={classNames('flex min-w-full flex-nowrap gap-8 whitespace-nowrap', innerClassName)}
-      data-testid="status-marquee-content"
-      style={
-        prefersReducedMotion
-          ? { animation: 'none', transform: 'translateX(0)' }
-          : { animation: 'status-marquee 20s linear infinite' }
-      }
-    >
-      <span className="flex-shrink-0">{message}</span>
-      <span className="flex-shrink-0" aria-hidden="true">
-        {message}
-      </span>
+}: StatusMarqueeProps) => {
+  const [isOverflowing, setIsOverflowing] = useState(false)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const node = contentRef.current
+
+    if (!node) {
+      setIsOverflowing(false)
+      return
+    }
+
+    const calculateOverflow = () => {
+      const nextIsOverflowing = node.scrollWidth > node.clientWidth
+      setIsOverflowing((previous) => (previous === nextIsOverflowing ? previous : nextIsOverflowing))
+    }
+
+    calculateOverflow()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      calculateOverflow()
+    })
+    observer.observe(node)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [message])
+
+  const shouldAnimate = isOverflowing && !prefersReducedMotion
+
+  return (
+    <div className={classNames('relative overflow-hidden', className)}>
+      <div
+        ref={contentRef}
+        className={classNames('flex min-w-full flex-nowrap gap-8 whitespace-nowrap', innerClassName)}
+        data-testid="status-marquee-content"
+        style={
+          shouldAnimate
+            ? { animation: 'status-marquee 20s linear infinite' }
+            : { animation: 'none', transform: 'translateX(0)' }
+        }
+      >
+        <span className="flex-shrink-0">{message}</span>
+        {shouldAnimate ? (
+          <span className="flex-shrink-0" aria-hidden="true">
+            {message}
+          </span>
+        ) : null}
+      </div>
     </div>
-  </div>
-)
+  )
+}
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const metricsRef = useRef<ViewportMetrics | null>(null)
   const worldRef = useRef<World | null>(null)
+  const inputRef = useRef<InputManager | null>(null)
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
   const recorderRef = useRef<CanvasRecorder | null>(null)
@@ -157,14 +197,20 @@ export function App() {
     score: 0,
     combo: 0,
     bestCombo: 0,
-    status: 'running',
+    status: 'menu',
     seed: seedRef.current,
     sessionBestScore: 0,
     personalBestScore: 0,
   }))
 
+  const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
   const [isSheetOpen, setSheetOpen] = useState(false)
+
+  const canvasAspectStyle = useMemo(
+    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
+    [isSmallViewport]
+  )
 
   useEffect(() => {
     if (isDesktop) {
@@ -200,7 +246,7 @@ export function App() {
         const durationError = validateAudioDuration(duration)
         if (durationError) {
           audio.removeCustomTrack(id)
-          setUploadError(durationError)
+          setUploadError(formatValidationErrorMessage(durationError, file.name))
           return
         }
 
@@ -293,6 +339,23 @@ export function App() {
     })
   }, [])
 
+  const resetAudioTimeline = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio || !audio.isSupported()) return
+    const state = audio.getState()
+    if (state === 'idle' || state === 'loading') {
+      audio.setCurrentTime(0)
+      return
+    }
+    const shouldResume = state === 'playing'
+    audio.stop()
+    if (shouldResume) {
+      audio.play().catch((error) => {
+        console.error(error)
+      })
+    }
+  }, [])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -367,6 +430,30 @@ export function App() {
     }
   }, [])
 
+  const resetAudioTimeline = useCallback(
+    ({ resumeWhenEnded = true }: { resumeWhenEnded?: boolean } = {}) => {
+      const audio = audioRef.current
+      if (!audio || !audioSupported) {
+        setAudioProgress((previous) => ({
+          ...previous,
+          time: 0,
+          progress: 0,
+        }))
+        return
+      }
+
+      const previousState = audio.getState()
+      audio.setCurrentTime(0)
+
+      if (previousState === 'ended' && resumeWhenEnded) {
+        audio.play().catch((error) => {
+          console.error(error)
+        })
+      }
+    },
+    [audioSupported],
+  )
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -414,6 +501,7 @@ export function App() {
     const renderer = new SceneRenderer(context)
     const input = new InputManager(canvas, () => metricsRef.current)
     input.bind()
+    inputRef.current = input
 
     const updateHud = () => pushHud(world)
     updateHud()
@@ -432,10 +520,26 @@ export function App() {
     resizeObserver.observe(canvas)
     window.addEventListener('resize', updateMetrics)
 
+    const handleRunRestart = () => {
+      resetAudioTimeline()
+    }
+
     const loop = createGameLoop({
       update: (dt) => {
+        input.setStatus(world.state.status)
         const snapshot = input.consumeActions()
+
+        world.update({
+          ...snapshot,
+          dt,
+          onRunRestart: handleRunRestart,
+        })
+
         world.update({ ...snapshot, dt })
+        if (world.consumePendingReset()) {
+          resetAudioTimeline()
+        }
+
         updateHud()
       },
       render: (alpha) => {
@@ -449,13 +553,16 @@ export function App() {
       loop.stop()
       renderer.dispose()
       input.unbind()
+      if (inputRef.current === input) {
+        inputRef.current = null
+      }
       resizeObserver.disconnect()
       window.removeEventListener('resize', updateMetrics)
       if (detachAudioEvents) detachAudioEvents()
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
     }
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -489,21 +596,32 @@ export function App() {
     world.reset(undefined, { bpm: selectedTrack.bpm })
   }, [selectedTrack, worldReady])
 
+  const handleStartRun = useCallback(() => {
+    inputRef.current?.requestStart()
+  }, [])
+
+  const handlePauseRun = useCallback(() => {
+    inputRef.current?.requestPause()
+  }, [])
+
   const handleRestart = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     world.reset()
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleNewSeed = useCallback(() => {
     const world = worldRef.current
     if (!world) return
+    resetAudioTimeline()
     const nextSeed = createSeed()
     seedRef.current = nextSeed
+    resetAudioTimeline()
     world.reset(nextSeed)
     pushHud(world)
-  }, [pushHud])
+  }, [pushHud, resetAudioTimeline])
 
   const handleTogglePlayback = useCallback(() => {
     const audio = audioRef.current
@@ -626,16 +744,37 @@ export function App() {
   const bufferedLabel = Number.isFinite(bufferedSeconds) ? bufferedSeconds.toFixed(1) : '0.0'
   const bufferLimitLabel = Number.isFinite(bufferLimit) ? bufferLimit.toFixed(0) : '0'
 
-  const statusMessage =
-    hud.status === 'gameover'
-      ? 'Signal lost · tap or press Space/R to restart'
-      : !audioSupported
-        ? 'Web audio unavailable · generator runs on default tempo'
-        : audioState === 'loading'
-          ? 'Analyzing track · hold tight for beat data'
-          : audioState === 'playing'
-            ? 'Stay in rhythm · jump with Space, click or tap'
-            : 'Audio paused · resume playback to sync obstacles'
+  const statusMessage = (() => {
+    if (hud.status === 'menu') {
+      return 'Navigation idle · tap or press Space to start the run'
+    }
+    if (hud.status === 'paused') {
+      return 'Run paused · tap or press Space to resume'
+    }
+    if (hud.status === 'gameover') {
+      return 'Signal lost · tap or press Space/R to restart'
+    }
+    if (!audioSupported) {
+      return 'Web audio unavailable · generator runs on default tempo'
+    }
+    if (audioState === 'loading') {
+      return 'Analyzing track · hold tight for beat data'
+    }
+    if (audioState === 'playing') {
+      return 'Stay in rhythm · jump with Space, click or tap'
+    }
+    return 'Audio paused · resume playback to sync obstacles'
+  })()
+
+  const isInMenu = hud.status === 'menu'
+  const isPaused = hud.status === 'paused'
+  const showStartOverlay = isInMenu || isPaused
+  const showHudPanels = hud.status === 'running' || hud.status === 'gameover'
+  const startOverlayPrimary = isPaused ? 'Tap to resume' : 'Tap to start'
+  const startOverlaySecondary = isPaused
+    ? 'Press Space or click to continue your route.'
+    : 'Press Space or click to launch the route.'
+  const startOverlayHint = 'Pause with Esc, right click, or a two-finger tap.'
 
   const telemetryItems = [
     {
@@ -786,7 +925,9 @@ export function App() {
         <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm shadow-lg shadow-slate-900/30">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Последние треки</p>
-            <span className="text-[0.65rem] text-slate-500">Сессия хранит до {MAX_RECENT_TRACKS} записей</span>
+            <span className="text-[0.65rem] text-slate-500">
+              Запоминаем до {MAX_RECENT_TRACKS} последних загрузок за сессию
+            </span>
           </div>
           <div className="mt-3 space-y-2">
             {recentTracks.map((entry) => {
@@ -919,6 +1060,14 @@ export function App() {
     <div className={classNames('flex flex-col gap-2 sm:flex-row', className)}>
       <button
         type="button"
+        onClick={handlePauseRun}
+        disabled={hud.status !== 'running'}
+        className="inline-flex items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        Pause run
+      </button>
+      <button
+        type="button"
         onClick={handleRestart}
         className="inline-flex items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/20"
       >
@@ -948,27 +1097,65 @@ export function App() {
   )
 
   const canvasSection = (
+
+    <section
+      className={classNames(
+        'relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10',
+        'aspect-hero-video sm:aspect-hero-video-wide'
+      )}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block w-full cursor-crosshair bg-transparent"
+        role="presentation"
+        style={canvasAspectStyle}
+
     <section className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10">
-      <canvas ref={canvasRef} className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]" role="presentation" />
+      <canvas
+        ref={canvasRef}
+        className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]"
+        style={{ touchAction: 'none' }}
+        aria-label="Gameplay canvas. Use touch gestures to guide the runner."
+
+      />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
-          {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-          {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-          {renderRunActions('pointer-events-auto')}
-        </div>
-        <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:justify-between sm:text-sm">
-          <StatusMarquee
-            message={statusMessage}
-            prefersReducedMotion={prefersReducedMotion}
-            className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-200 sm:flex-1"
-            innerClassName="gap-12"
-          />
-          <p className="font-mono text-[0.8rem] text-slate-400 sm:text-xs">
-            Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
-          </p>
-        </div>
+        {showHudPanels ? (
+          <>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
+              {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
+              {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
+              {renderRunActions('pointer-events-auto')}
+            </div>
+            <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:justify-between sm:text-sm">
+              <StatusMarquee
+                message={statusMessage}
+                prefersReducedMotion={prefersReducedMotion}
+                className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-200 sm:flex-1"
+                innerClassName="gap-12"
+              />
+              <p className="font-mono text-[0.8rem] text-slate-400 sm:text-xs">
+                Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
+              </p>
+            </div>
+          </>
+        ) : null}
       </div>
+      {showStartOverlay ? (
+        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-slate-950/60 px-6 py-8 text-center backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleStartRun}
+            data-testid="start-overlay"
+            className="flex w-full max-w-md flex-col items-center gap-3 rounded-3xl border border-cyan-400/50 bg-slate-900/80 px-6 py-8 text-center text-slate-100 shadow-2xl shadow-cyan-500/20 transition hover:bg-slate-900/70 focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950"
+          >
+            <span className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">{isPaused ? 'Paused' : 'Ready'}</span>
+            <span className="text-2xl font-semibold text-slate-50 sm:text-3xl">{startOverlayPrimary}</span>
+            <span className="text-sm text-slate-300 sm:text-base">{startOverlaySecondary}</span>
+            <span className="text-xs text-slate-500">{startOverlayHint}</span>
+          </button>
+        </div>
+      ) : null}
     </section>
   )
 

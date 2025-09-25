@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatValidationErrorMessage,
   INVALID_DURATION_ERROR,
   MIN_AUDIO_DURATION_SECONDS,
   MAX_AUDIO_DURATION_SECONDS,
   UNKNOWN_DURATION_ERROR,
+  UNSUPPORTED_TYPE_ERROR,
   validateAudioDuration,
   validateAudioFileType,
 } from './uploadValidation'
@@ -26,15 +28,32 @@ describe('uploadValidation', () => {
   })
 
   it('rejects unsupported formats', () => {
+
     expect(validateAudioFileType(createFile('document.txt', 'text/plain'))).toMatch(/Неподдерживаемый формат/)
     expect(validateAudioFileType(createFile('voice.webm', 'audio/webm'))).toMatch(/Неподдерживаемый формат/)
     expect(validateAudioFileType(createFile('voice.webm', ''))).toMatch(/Неподдерживаемый формат/)
+
+    const file = createFile('document.txt', 'text/plain')
+    const errorTemplate = validateAudioFileType(file)
+    expect(errorTemplate).toBe(UNSUPPORTED_TYPE_ERROR)
+    expect(formatValidationErrorMessage(errorTemplate!, file.name)).toContain(file.name)
+
   })
 
   it('validates duration boundaries', () => {
-    expect(validateAudioDuration(MIN_AUDIO_DURATION_SECONDS - 1)).toBe(INVALID_DURATION_ERROR)
-    expect(validateAudioDuration(MAX_AUDIO_DURATION_SECONDS + 5)).toBe(INVALID_DURATION_ERROR)
-    expect(validateAudioDuration(0)).toBe(UNKNOWN_DURATION_ERROR)
+    const fileName = 'loop.mp3'
+    const tooShort = validateAudioDuration(MIN_AUDIO_DURATION_SECONDS - 1)
+    expect(tooShort).toBe(INVALID_DURATION_ERROR)
+    expect(formatValidationErrorMessage(tooShort!, fileName)).toContain(fileName)
+
+    const tooLong = validateAudioDuration(MAX_AUDIO_DURATION_SECONDS + 5)
+    expect(tooLong).toBe(INVALID_DURATION_ERROR)
+    expect(formatValidationErrorMessage(tooLong!, fileName)).toContain(fileName)
+
+    const unknown = validateAudioDuration(0)
+    expect(unknown).toBe(UNKNOWN_DURATION_ERROR)
+    expect(formatValidationErrorMessage(unknown!, fileName)).toContain(fileName)
+
     expect(validateAudioDuration(120)).toBeNull()
   })
 })

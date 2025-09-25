@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   describeAcceptedFormats,
+  formatValidationErrorMessage,
   validateAudioFileType,
 } from '../audio/uploadValidation'
 
@@ -42,7 +43,7 @@ export function TrackUpload({
       const file = files[0]
       const validationError = validateAudioFileType(file)
       if (validationError) {
-        setLocalError(validationError)
+        setLocalError(formatValidationErrorMessage(validationError, file.name))
         return
       }
       resetErrors()
@@ -126,7 +127,11 @@ export function TrackUpload({
       <p className="mt-2 text-xs text-slate-400">
         Поддерживаются форматы {describeAcceptedFormats()} · перетащите файл на экран или выберите вручную.
       </p>
-      {combinedError ? <p className="mt-1 text-xs text-rose-300">{combinedError}</p> : null}
+      {combinedError ? (
+        <p className="mt-1 text-xs text-rose-300" title={combinedError}>
+          {combinedError}
+        </p>
+      ) : null}
 
       {dragActive ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">

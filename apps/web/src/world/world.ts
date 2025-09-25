@@ -23,7 +23,7 @@ const createBaseState = (seed: string, stage: StageMetrics): WorldState => ({
   seed,
   time: 0,
   beat: 0,
-  status: 'running',
+  status: 'menu',
   stage,
   player: createInitialPlayer(stage),
   obstacles: [],
@@ -43,10 +43,13 @@ export interface WorldConfig {
 
 export interface WorldUpdateInput {
   jump: boolean
+  start: boolean
+  pause: boolean
   restart: boolean
   jumpHoldDuration: number
   pointer?: Vector2
   dt: number
+  onRunRestart?: (event: { reason: 'manual' | 'gameover'; seed: string }) => void
 }
 
 export class World {
@@ -60,6 +63,7 @@ export class World {
   private flashId = 0
   private sessionBestScore = 0
   private personalBest: PersonalBestRecord
+  private pendingReset = false
 
   constructor(config: WorldConfig) {
     this.baseSeed = config.seed
@@ -127,14 +131,47 @@ export class World {
     this.advanceFlashes(input.dt)
 
     if (input.restart) {
+
+      input.onRunRestart?.({ reason: 'manual', seed: this.baseSeed })
+
+      this.pendingReset = true
+
       this.reset(this.baseSeed)
       return
     }
 
+
+    const currentStatus = this.state.status
+
+    if (currentStatus === 'gameover') {
     if (this.state.status === 'gameover') {
+
       if (input.jump) {
+        input.onRunRestart?.({ reason: 'gameover', seed: this.baseSeed })
+
+      if (input.jump || input.restart) {
+        this.pendingReset = true
+
         this.reset(this.baseSeed)
       }
+      return
+    }
+
+    if (currentStatus === 'menu') {
+      if (!input.start) {
+        return
+      }
+      this.state.status = 'running'
+    } else if (currentStatus === 'paused') {
+      if (input.start) {
+        this.state.status = 'running'
+      } else {
+        return
+      }
+    }
+
+    if (input.pause && this.state.status === 'running') {
+      this.state.status = 'paused'
       return
     }
 
@@ -228,6 +265,12 @@ export class World {
     if (pointer) {
       this.state.pointer = { ...pointer }
     }
+  }
+
+  consumePendingReset(): boolean {
+    const pending = this.pendingReset
+    this.pendingReset = false
+    return pending
   }
 
   private addFlash(flash: Omit<FlashEffect, 'id' | 'age'>): void {

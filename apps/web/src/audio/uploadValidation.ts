@@ -18,10 +18,15 @@ const normalizeExtension = (fileName: string): string => {
 
 export const describeAcceptedFormats = (): string => 'MP3, WAV или OGG'
 
-export const UNSUPPORTED_TYPE_ERROR = `Неподдерживаемый формат файла. Загрузите ${describeAcceptedFormats()}.`
-export const INVALID_DURATION_ERROR = `Трек должен длиться от ${MIN_AUDIO_DURATION_SECONDS} до ${MAX_AUDIO_DURATION_SECONDS} секунд.`
+export const FILE_NAME_PLACEHOLDER = '{fileName}'
 
-export const UNKNOWN_DURATION_ERROR = 'Не удалось определить длительность трека.'
+export const UNSUPPORTED_TYPE_ERROR = `Неподдерживаемый формат файла ${FILE_NAME_PLACEHOLDER}. Загрузите ${describeAcceptedFormats()}.`
+export const INVALID_DURATION_ERROR = `Трек ${FILE_NAME_PLACEHOLDER} должен длиться от ${MIN_AUDIO_DURATION_SECONDS} до ${MAX_AUDIO_DURATION_SECONDS} секунд.`
+
+export const UNKNOWN_DURATION_ERROR = `Не удалось определить длительность трека ${FILE_NAME_PLACEHOLDER}.`
+
+export const formatValidationErrorMessage = (template: string, fileName: string): string =>
+  template.replaceAll(FILE_NAME_PLACEHOLDER, fileName)
 
 export function isSupportedAudioFile(file: File): boolean {
   if (file.type && ACCEPTED_MIME_TYPES.has(file.type.toLowerCase())) {
