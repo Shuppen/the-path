@@ -32,6 +32,7 @@ const BottomSheet = ({
   id,
 }: BottomSheetProps) => {
   const tracker = useRef<PointerTracker>({ startY: 0, pointerId: null })
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [dragOffset, setDragOffset] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const handleRef = useRef<HTMLButtonElement | null>(null)
@@ -43,6 +44,19 @@ const BottomSheet = ({
     if (!open) {
       setDragOffset(0)
       setIsDragging(false)
+    }
+  }, [open])
+
+  useEffect(() => {
+    const node = rootRef.current
+    if (!node) {
+      return
+    }
+
+    if (!open) {
+      node.setAttribute('inert', '')
+    } else {
+      node.removeAttribute('inert')
     }
   }, [open])
 
@@ -123,7 +137,15 @@ const BottomSheet = ({
   }
 
   return (
+
     <div className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center px-3 md:hidden" aria-hidden={!open}>
+
+    <div
+      ref={rootRef}
+      className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center md:hidden"
+      aria-hidden={!open}
+    >
+
       <div
         className="pointer-events-auto fixed inset-0 z-30 bg-surface-overlay/80 backdrop-blur-sm"
         style={overlayStyle}
@@ -141,7 +163,11 @@ const BottomSheet = ({
         style={sheetStyle}
         data-testid="bottom-sheet"
       >
+
         <div className="flex flex-col gap-4 px-6 pb-8 pt-5">
+
+        <div className="flex flex-col gap-4 px-6 pb-8 pt-4 sheet-safe-area">
+
           <button
             type="button"
             aria-label="Drag handle"

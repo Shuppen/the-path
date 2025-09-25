@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ViewportMetrics } from '@the-path/types'
-import { getViewportMetrics, resizeCanvasToDisplaySize } from '@the-path/utils'
+import type { DevicePerformanceProfile, ViewportMetrics } from '@the-path/types'
+import {
+  areViewportMetricsEqual,
+  getDevicePerformanceProfile,
+  getViewportMetrics,
+  resizeCanvasToDisplaySize,
+} from '@the-path/utils'
 
 import { createSeed } from './core/prng'
 import { createGameLoop } from './engine/loop'
@@ -16,6 +21,8 @@ import TrackUpload from './ui/TrackUpload'
 import { LeadersBoard } from './ui/LeadersBoard'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 import useMediaQuery from './hooks/useMediaQuery'
+import { useCanvasPerformanceMonitor } from './hooks/useCanvasPerformanceMonitor'
+import CanvasDiagnosticsOverlay from './components/canvas/CanvasDiagnosticsOverlay'
 import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import {
   type StoredRecentTrack,
@@ -32,6 +39,19 @@ const clamp01 = (value: number): number => {
   if (value < 0) return 0
   if (value > 1) return 1
   return value
+}
+
+const shouldUpdateProfile = (
+  previous: DevicePerformanceProfile,
+  next: DevicePerformanceProfile,
+): boolean => {
+  if (previous === next) return false
+  if (previous.tier !== next.tier) return true
+  if (previous.pixelBudget !== next.pixelBudget) return true
+  if (Math.abs(previous.recommendedDevicePixelRatio - next.recommendedDevicePixelRatio) > 0.05) return true
+  if (previous.isMobile !== next.isMobile) return true
+  if (previous.prefersReducedMotion !== next.prefersReducedMotion) return true
+  return false
 }
 
 const formatTime = (value: number): string => {
@@ -157,6 +177,9 @@ export function App() {
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
   const recorderRef = useRef<CanvasRecorder | null>(null)
+  const [canvasMetrics, setCanvasMetrics] = useState<ViewportMetrics | null>(null)
+  const [deviceProfile, setDeviceProfile] = useState<DevicePerformanceProfile>(() => getDevicePerformanceProfile())
+  const deviceProfileRef = useRef<DevicePerformanceProfile>(deviceProfile)
 
   const prefersReducedMotion = usePrefersReducedMotion()
 
@@ -203,20 +226,38 @@ export function App() {
     personalBestScore: 0,
   }))
 
+
+  const performanceSample = useCanvasPerformanceMonitor({
+    enabled: worldReady,
+    sampleIntervalMs: deviceProfile.tier === 'low' ? 1400 : 900,
+  })
+
   const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
+
+  const isWideMobile = useMediaQuery('(min-width: 480px)')
+  const isTabletOrLarger = useMediaQuery('(min-width: 640px)')
+
   const [isSheetOpen, setSheetOpen] = useState(false)
 
   const canvasAspectStyle = useMemo(
-    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
-    [isSmallViewport]
+    () => ({ aspectRatio: isWideMobile ? '18 / 9' : '16 / 9' }),
+    [isWideMobile]
   )
 
   useEffect(() => {
+
+    deviceProfileRef.current = deviceProfile
+  }, [deviceProfile])
+
+  useEffect(() => {
     if (isDesktop) {
+
+    if (isTabletOrLarger) {
+
       setSheetOpen(false)
     }
-  }, [isDesktop])
+  }, [isTabletOrLarger])
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
@@ -441,19 +482,47 @@ export function App() {
     const canvas = canvasRef.current
     if (!canvas) return undefined
 
-    const context = canvas.getContext('2d', { alpha: false })
-    if (!context) return undefined
+    const commitProfile = (profile: DevicePerformanceProfile) => {
+      deviceProfileRef.current = profile
+      setDeviceProfile((previous) => (shouldUpdateProfile(previous, profile) ? profile : previous))
+    }
 
-    const metrics = getViewportMetrics(canvas)
-    metricsRef.current = metrics
-    resizeCanvasToDisplaySize(canvas, metrics)
+    const commitMetrics = (next: ViewportMetrics) => {
+      metricsRef.current = next
+      setCanvasMetrics((previous) => (areViewportMetricsEqual(previous, next) ? previous : next))
+    }
+
+    const initialProfile = getDevicePerformanceProfile({
+      canvasWidth: canvas.clientWidth,
+      canvasHeight: canvas.clientHeight,
+      devicePixelRatio: globalThis.devicePixelRatio ?? 1,
+    })
+    commitProfile(initialProfile)
+
+    const initialMetrics = getViewportMetrics(canvas, {
+      performanceProfile: initialProfile,
+      pixelBudget: initialProfile.pixelBudget,
+    })
+    resizeCanvasToDisplaySize(canvas, initialMetrics)
+    commitMetrics(initialMetrics)
+
+    const contextAttributes: CanvasRenderingContext2DSettings = { alpha: false }
+    if (initialProfile.tier === 'low') {
+      contextAttributes.desynchronized = true
+    }
+    const context =
+      canvas.getContext('2d', contextAttributes) ?? canvas.getContext('2d', { alpha: false })
+    if (!context) {
+      return undefined
+    }
 
     const world = new World({
       seed: seedRef.current,
-      width: canvas.width || Math.max(metrics.width, 1),
-      height: canvas.height || Math.max(metrics.height, 1),
+      width: canvas.width || Math.max(initialMetrics.width, 1),
+      height: canvas.height || Math.max(initialMetrics.height, 1),
     })
     worldRef.current = world
+    world.setViewport(canvas.width, canvas.height)
 
     const audio = audioRef.current
     let detachAudioEvents: (() => void) | undefined
@@ -491,42 +560,72 @@ export function App() {
     renderer.render(world.state)
 
     const updateMetrics = () => {
-      const next = getViewportMetrics(canvas)
-      metricsRef.current = next
+      const profile = getDevicePerformanceProfile({
+        canvasWidth: canvas.clientWidth,
+        canvasHeight: canvas.clientHeight,
+        devicePixelRatio: metricsRef.current?.devicePixelRatio ?? globalThis.devicePixelRatio ?? 1,
+        pixelBudget: deviceProfileRef.current.pixelBudget,
+      })
+      commitProfile(profile)
+      const next = getViewportMetrics(canvas, {
+        performanceProfile: profile,
+        pixelBudget: profile.pixelBudget,
+      })
       resizeCanvasToDisplaySize(canvas, next)
+      commitMetrics(next)
       world.setViewport(canvas.width, canvas.height)
     }
 
-    updateMetrics()
+    let resizeObserver: ResizeObserver | undefined
+    let resizeFrame = 0
+    let pendingResize = false
 
-    const resizeObserver = new ResizeObserver(() => updateMetrics())
-    resizeObserver.observe(canvas)
-    window.addEventListener('resize', updateMetrics)
+    const enqueueMetricsUpdate = () => {
+      if (pendingResize) return
+      pendingResize = true
+      resizeFrame = requestAnimationFrame(() => {
+        pendingResize = false
+        updateMetrics()
+      })
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => enqueueMetricsUpdate())
+      resizeObserver.observe(canvas)
+    }
+
+    window.addEventListener('resize', enqueueMetricsUpdate)
+    window.addEventListener('orientationchange', enqueueMetricsUpdate)
 
     const handleRunRestart = () => {
       resetAudioTimeline()
     }
 
-    const loop = createGameLoop({
-      update: (dt) => {
-        input.setStatus(world.state.status)
-        const snapshot = input.consumeActions()
+    const loop = createGameLoop(
+      {
+        update: (dt) => {
+          input.setStatus(world.state.status)
+          const snapshot = input.consumeActions()
 
-        world.update({
-          ...snapshot,
-          dt,
-          onRunRestart: handleRunRestart,
-        })
-        if (world.consumePendingReset()) {
-          resetAudioTimeline()
-        }
+          world.update({
+            ...snapshot,
+            dt,
+            onRunRestart: handleRunRestart,
+          })
+          if (world.consumePendingReset()) {
+            resetAudioTimeline()
+          }
 
-        updateHud()
+          updateHud()
+        },
+        render: (alpha) => {
+          renderer.render(world.state, alpha)
+        },
       },
-      render: (alpha) => {
-        renderer.render(world.state, alpha)
+      {
+        performanceProfile: () => deviceProfileRef.current,
       },
-    })
+    )
     loop.start()
     setWorldReady(true)
 
@@ -537,11 +636,18 @@ export function App() {
       if (inputRef.current === input) {
         inputRef.current = null
       }
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', updateMetrics)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
+      window.removeEventListener('resize', enqueueMetricsUpdate)
+      window.removeEventListener('orientationchange', enqueueMetricsUpdate)
+      if (resizeFrame) {
+        cancelAnimationFrame(resizeFrame)
+      }
       if (detachAudioEvents) detachAudioEvents()
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
+      metricsRef.current = null
     }
   }, [pushHud, resetAudioTimeline])
 
@@ -1118,6 +1224,14 @@ export function App() {
           </>
         ) : null}
       </div>
+      <CanvasDiagnosticsOverlay
+        metrics={canvasMetrics}
+        profile={deviceProfile}
+        fps={performanceSample.fps}
+        frameTime={performanceSample.frameTime}
+        className="absolute bottom-3 left-3"
+        hidden={!worldReady}
+      />
       {showStartOverlay ? (
         <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-surface-overlay/90 px-6 py-8 text-center backdrop-blur-sm">
           <button
@@ -1176,9 +1290,15 @@ export function App() {
   )
 
   return (
+
     <div className="min-h-screen bg-surface-base text-slate-100">
       <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
         {isDesktop ? (
+
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 pb-20 pt-10 sm:gap-10 sm:px-6 sm:pb-24 sm:pt-12">
+        {isTabletOrLarger ? (
+
           <div className="grid gap-10 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
             <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
               {renderTrackControls(true)}
@@ -1213,7 +1333,7 @@ export function App() {
           </div>
         )}
       </main>
-      {!isDesktop ? (
+      {!isTabletOrLarger ? (
         <>
           <button
             type="button"
@@ -1225,6 +1345,10 @@ export function App() {
               'fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent-cyan text-slate-950 shadow-glow transition hover:bg-accent-cyan/90 md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
               isSheetOpen && 'translate-y-12 opacity-0 pointer-events-none',
             )}
+            style={{
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+              right: 'calc(env(safe-area-inset-right, 0px) + 1.5rem)',
+            }}
           >
             <svg
               viewBox="0 0 24 24"
