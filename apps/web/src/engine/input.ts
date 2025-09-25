@@ -1,11 +1,11 @@
 import type { ViewportMetrics } from '@the-path/types'
 import { toCanvasCoordinates } from '@the-path/utils'
 
-export type SwipeDirection = 'left' | 'right' | 'up' | 'down'
+export type SwipeAxis = -1 | 0 | 1
 
 export interface InputFrame {
   tapLane: number | null
-  swipe: SwipeDirection | null
+  swipe: SwipeAxis
 }
 
 export type MetricsProvider = () => ViewportMetrics | null
@@ -21,13 +21,11 @@ const KEYBOARD_LANE_MAP: Record<string, number | undefined> = {
   KeyF: 3,
 }
 
-const KEYBOARD_SWIPE_MAP: Record<string, SwipeDirection | undefined> = {
-  ArrowLeft: 'left',
-  KeyJ: 'left',
-  ArrowRight: 'right',
-  KeyL: 'right',
-  ArrowUp: 'up',
-  ArrowDown: 'down',
+const KEYBOARD_SWIPE_MAP: Record<string, SwipeAxis | undefined> = {
+  ArrowLeft: -1,
+  KeyJ: -1,
+  ArrowRight: 1,
+  KeyL: 1,
 }
 
 const resolveTimestamp = (): number => {
@@ -55,16 +53,25 @@ const distanceSquared = (ax: number, ay: number, bx: number, by: number): number
   return dx * dx + dy * dy
 }
 
-const determineSwipeDirection = (dx: number, dy: number): SwipeDirection => {
-  if (Math.abs(dx) > Math.abs(dy)) {
-    return dx > 0 ? 'right' : 'left'
+const determineSwipeAxis = (dx: number, dy: number): SwipeAxis => {
+  if (Math.abs(dx) <= Math.abs(dy)) {
+    return 0
   }
-  return dy > 0 ? 'down' : 'up'
+  return dx > 0 ? 1 : -1
+}
+
+const HITBAR_ACTIVATION_RATIO = 0.28
+
+const clampLane = (lane: number | null): number | null => {
+  if (lane === null || Number.isNaN(lane)) return null
+  if (lane < 0) return 0
+  if (lane > 3) return 3
+  return lane
 }
 
 export class InputManager {
   private readonly taps: number[] = []
-  private readonly swipes: SwipeDirection[] = []
+  private readonly swipes: SwipeAxis[] = []
   private readonly pointers = new Map<number, ActivePointer>()
   private readonly preventContextMenu = (event: Event) => {
     event.preventDefault()
@@ -139,13 +146,19 @@ export class InputManager {
     const travelSq = distanceSquared(point.x, point.y, active.startX, active.startY)
 
     if (duration <= SWIPE_MAX_DURATION_MS && travelSq >= this.getSwipeThreshold()) {
-      this.swipes.push(determineSwipeDirection(deltaX, deltaY))
-      return
+      const axis = determineSwipeAxis(deltaX, deltaY)
+      if (axis !== 0) {
+        this.swipes.push(axis)
+        return
+      }
     }
 
-    const lane = this.resolveLane(point.x)
+    const lane = clampLane(this.resolveLane(point.x))
     if (lane !== null) {
-      this.taps.push(lane)
+      const activationY = metrics.height * (1 - HITBAR_ACTIVATION_RATIO)
+      if (point.y >= activationY) {
+        this.taps.push(lane)
+      }
     }
   }
 
@@ -153,7 +166,7 @@ export class InputManager {
     if (event.repeat) return
     const swipe = KEYBOARD_SWIPE_MAP[event.code]
     const lane = KEYBOARD_LANE_MAP[event.code]
-    if (swipe) {
+    if (typeof swipe === 'number') {
       this.swipes.push(swipe)
       event.preventDefault()
       return
@@ -165,6 +178,7 @@ export class InputManager {
   }
 
   bind(): void {
+    this.canvas.style.touchAction = 'none'
     this.canvas.addEventListener('pointerdown', this.handlePointerDown)
     this.canvas.addEventListener('pointermove', this.handlePointerMove)
     this.canvas.addEventListener('contextmenu', this.preventContextMenu)
@@ -177,6 +191,7 @@ export class InputManager {
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     this.canvas.removeEventListener('pointermove', this.handlePointerMove)
     this.canvas.removeEventListener('contextmenu', this.preventContextMenu)
+    this.canvas.style.touchAction = ''
     window.removeEventListener('pointerup', this.handlePointerEnd)
     window.removeEventListener('pointercancel', this.handlePointerEnd)
     window.removeEventListener('keydown', this.handleKeyDown)
@@ -187,7 +202,7 @@ export class InputManager {
 
   consumeFrame(): InputFrame {
     const tapLane = this.taps.shift() ?? null
-    const swipe = this.swipes.shift() ?? null
+    const swipe = this.swipes.shift() ?? 0
     return { tapLane, swipe }
   }
 }

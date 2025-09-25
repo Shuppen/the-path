@@ -17,7 +17,15 @@ import {
 } from './audio/recentTracks'
 import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import { getPrefersReducedMotion, setReducedMotionOverride } from './environment/reducedMotion'
-import type { WorldSnapshot } from './world'
+import {
+  type ActiveUpgrade,
+  type CalibrationSettings,
+  type MetaProgressState,
+  type WorldMode,
+  type WorldSnapshot,
+  type UpgradeCard,
+} from './world'
+import { readCalibrationSettings, readMetaProgress, writeCalibrationSettings, writeMetaProgress } from './world/storage'
 
 import HomeScreen from './screens/Home'
 import SongSelectScreen from './screens/SongSelect'
@@ -148,6 +156,10 @@ export function App() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [dprCap, setDprCap] = useState(1.5)
   const [reducedMotionEnabled, setReducedMotionEnabled] = useState<boolean>(() => getPrefersReducedMotion())
+  const [calibration, setCalibration] = useState<CalibrationSettings>(() => readCalibrationSettings())
+  const [activeUpgrades, setActiveUpgrades] = useState<ActiveUpgrade[]>([])
+  const [worldMode, setWorldMode] = useState<WorldMode>('track')
+  const [metaProgress, setMetaProgress] = useState<MetaProgressState>(() => readMetaProgress())
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
@@ -167,6 +179,14 @@ export function App() {
   useEffect(() => {
     setReducedMotionOverride(reducedMotionEnabled)
   }, [reducedMotionEnabled])
+
+  useEffect(() => {
+    writeCalibrationSettings(calibration)
+  }, [calibration])
+
+  useEffect(() => {
+    writeMetaProgress(metaProgress)
+  }, [metaProgress])
 
   const resolveTrackById = useCallback(
     (id: string): AudioTrackManifestEntry | undefined =>
@@ -198,6 +218,7 @@ export function App() {
       setSelectedTrackId(selectedTrack.id)
       setGameResult({ track: selectedTrack, snapshot })
       setLastTrackId(selectedTrack.id)
+      setMetaProgress(snapshot.meta)
       setScreen('results')
     },
     [selectedTrack],
@@ -211,6 +232,7 @@ export function App() {
       if (snapshot && selectedTrack) {
         setSelectedTrackId(selectedTrack.id)
         setGameResult({ track: selectedTrack, snapshot })
+        setMetaProgress(snapshot.meta)
         setScreen('results')
         return
       }
@@ -311,6 +333,36 @@ export function App() {
     setReducedMotionEnabled(value)
   }, [])
 
+  const handleChangeCalibration = useCallback((value: CalibrationSettings) => {
+    setCalibration(value)
+  }, [])
+
+  const handleSelectUpgrade = useCallback((card: UpgradeCard) => {
+    setActiveUpgrades((previous) => {
+      const existing = previous.find((upgrade) => upgrade.id === card.id)
+      if (existing) {
+        return previous.map((upgrade) =>
+          upgrade.id === card.id ? { ...upgrade, stacks: upgrade.stacks + 1 } : upgrade,
+        )
+      }
+      const next: ActiveUpgrade = { ...card, stacks: 1 }
+      return [...previous, next]
+    })
+    setGameResult((previous) => {
+      if (!previous) return previous
+      return {
+        ...previous,
+        snapshot: {
+          ...previous.snapshot,
+          upgrades: {
+            ...previous.snapshot.upgrades,
+            offered: previous.snapshot.upgrades.offered.filter((upgrade) => upgrade.id !== card.id),
+          },
+        },
+      }
+    })
+  }, [])
+
   const lastTrack = useMemo(() => (lastTrackId ? resolveTrackById(lastTrackId) ?? null : null), [lastTrackId, resolveTrackById])
 
   return (
@@ -321,6 +373,10 @@ export function App() {
           onOpenSongSelect={() => setScreen('song-select')}
           onOpenSettings={() => setScreen('settings')}
           lastTrack={lastTrack}
+          mode={worldMode}
+          onChangeMode={setWorldMode}
+          upgrades={activeUpgrades}
+          meta={metaProgress}
         />
       ) : null}
 
@@ -348,12 +404,24 @@ export function App() {
           onChangeDpr={handleChangeDpr}
           reducedMotion={reducedMotionEnabled}
           onChangeReducedMotion={handleToggleReducedMotion}
+          calibration={calibration}
+          onChangeCalibration={handleChangeCalibration}
           onBack={() => setScreen('home')}
         />
       ) : null}
 
       {screen === 'game' && selectedTrack ? (
-        <GameScreen track={selectedTrack} audio={audio} dprCap={dprCap} onComplete={handleShowResults} onExit={handleExitGame} />
+        <GameScreen
+          track={selectedTrack}
+          audio={audio}
+          dprCap={dprCap}
+          calibration={calibration}
+          upgrades={activeUpgrades}
+          mode={worldMode}
+          meta={metaProgress}
+          onComplete={handleShowResults}
+          onExit={handleExitGame}
+        />
       ) : null}
 
       {screen === 'results' && gameResult ? (
@@ -363,6 +431,8 @@ export function App() {
           onRetry={handleStartGame}
           onHome={() => setScreen('home')}
           onSongSelect={() => setScreen('song-select')}
+          onSelectUpgrade={handleSelectUpgrade}
+          upgrades={activeUpgrades}
         />
       ) : null}
     </div>

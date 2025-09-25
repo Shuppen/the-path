@@ -16,3 +16,21 @@ export const LANE_SWITCH_MIN_DURATION = 0.12
 export const LANE_SWITCH_MAX_DURATION = 0.16
 
 export const FEEDBACK_LIFETIME = 0.45
+
+export const COMBO_MULTIPLIER_STEP = 12
+export const COMBO_MULTIPLIER_CAP = 8
+
+export const FEVER_INCREMENT_PERFECT = 0.12
+export const FEVER_INCREMENT_GOOD = 0.06
+export const FEVER_DRAIN_RATE = 0.18
+export const FEVER_DURATION = 8
+export const FEVER_TRIGGER_THRESHOLD = 1
+
+export const RUNNER_MAX_HEALTH = 3
+export const RUNNER_INITIAL_SHIELD = 0
+export const OBSTACLE_DAMAGE = 1
+
+export const ENDLESS_SPEED_STEP = 0.015
+export const ENDLESS_DENSITY_STEP = 0.025
+
+export const CALIBRATION_LIMIT_MS = 120
