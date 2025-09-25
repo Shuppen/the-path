@@ -137,15 +137,11 @@ const BottomSheet = ({
   }
 
   return (
-
-    <div className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center px-3 md:hidden" aria-hidden={!open}>
-
     <div
       ref={rootRef}
-      className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center md:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center px-3 md:hidden"
       aria-hidden={!open}
     >
-
       <div
         className="pointer-events-auto fixed inset-0 z-30 bg-surface-overlay/80 backdrop-blur-sm"
         style={overlayStyle}
@@ -163,11 +159,7 @@ const BottomSheet = ({
         style={sheetStyle}
         data-testid="bottom-sheet"
       >
-
-        <div className="flex flex-col gap-4 px-6 pb-8 pt-5">
-
         <div className="flex flex-col gap-4 px-6 pb-8 pt-4 sheet-safe-area">
-
           <button
             type="button"
             aria-label="Drag handle"

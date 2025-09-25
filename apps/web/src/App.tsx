@@ -232,9 +232,6 @@ export function App() {
     sampleIntervalMs: deviceProfile.tier === 'low' ? 1400 : 900,
   })
 
-  const isSmallViewport = useMediaQuery('(min-width: 640px)')
-  const isDesktop = useMediaQuery('(min-width: 768px)')
-
   const isWideMobile = useMediaQuery('(min-width: 480px)')
   const isTabletOrLarger = useMediaQuery('(min-width: 640px)')
 
@@ -251,10 +248,7 @@ export function App() {
   }, [deviceProfile])
 
   useEffect(() => {
-    if (isDesktop) {
-
     if (isTabletOrLarger) {
-
       setSheetOpen(false)
     }
   }, [isTabletOrLarger])
@@ -1290,15 +1284,9 @@ export function App() {
   )
 
   return (
-
     <div className="min-h-screen bg-surface-base text-slate-100">
       <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
-        {isDesktop ? (
-
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 pb-20 pt-10 sm:gap-10 sm:px-6 sm:pb-24 sm:pt-12">
         {isTabletOrLarger ? (
-
           <div className="grid gap-10 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
             <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
               {renderTrackControls(true)}

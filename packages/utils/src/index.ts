@@ -1,3 +1,3 @@
-export * from './canvas/loop'
-export * from './canvas/metrics'
-export * from './canvas/performance'
+export * from './canvas/loop.js'
+export * from './canvas/metrics.js'
+export * from './canvas/performance.js'

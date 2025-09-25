@@ -1,6 +1,6 @@
 import type { DevicePerformanceProfile, ViewportMetrics } from '@the-path/types'
 
-import { getDevicePerformanceProfile } from './performance'
+import { getDevicePerformanceProfile } from './performance.js'
 
 export interface ViewportMetricsOptions {
   devicePixelRatio?: number
