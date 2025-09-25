@@ -1,91 +1,35 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Mock } from 'vitest'
 
 import type { WorldState } from '../world'
 import { SceneRenderer } from './sceneRenderer'
 
-const MEDIA_QUERY = '(prefers-reduced-motion: reduce)'
+const unsubscribe = vi.fn()
+const listeners = new Set<(value: boolean) => void>()
 
-const setupMatchMedia = (initial: boolean) => {
-  const original = window.matchMedia
-  let current = initial
-  const listeners = new Set<(event: MediaQueryListEvent) => void>()
-
-  const createEvent = (value: boolean): MediaQueryListEvent =>
-    ({ matches: value, media: MEDIA_QUERY } as MediaQueryListEvent)
-
-  const createMediaQueryList = (): MediaQueryList => {
-    const mediaQueryList: Partial<MediaQueryList> = {
-      media: MEDIA_QUERY,
-      onchange: null,
-      addEventListener: (_event: 'change', listener: EventListenerOrEventListenerObject) => {
-        if (typeof listener === 'function') {
-          listeners.add(listener as (event: MediaQueryListEvent) => void)
-        }
-      },
-      removeEventListener: (_event: 'change', listener: EventListenerOrEventListenerObject) => {
-        if (typeof listener === 'function') {
-          listeners.delete(listener as (event: MediaQueryListEvent) => void)
-        }
-      },
-      addListener: (listener: ((this: MediaQueryList, ev: MediaQueryListEvent) => void) | null) => {
-        if (typeof listener === 'function') {
-          listeners.add(listener as (event: MediaQueryListEvent) => void)
-        }
-      },
-      removeListener: (listener: ((this: MediaQueryList, ev: MediaQueryListEvent) => void) | null) => {
-        if (typeof listener === 'function') {
-          listeners.delete(listener as (event: MediaQueryListEvent) => void)
-        }
-      },
-      dispatchEvent: (event: Event) => {
-        listeners.forEach((listener) => listener(event as MediaQueryListEvent))
-        return true
-      },
+vi.mock('../environment/reducedMotion', () => ({
+  subscribeToReducedMotion: vi.fn((listener: (value: boolean) => void) => {
+    listeners.add(listener)
+    listener(false)
+    return () => {
+      listeners.delete(listener)
+      unsubscribe()
     }
+  }),
+}))
 
-    Object.defineProperty(mediaQueryList, 'matches', {
-      get: () => current,
-    })
-
-    return mediaQueryList as MediaQueryList
-  }
-
-  Object.defineProperty(window, 'matchMedia', {
-    configurable: true,
-    writable: true,
-    value: vi.fn().mockImplementation(createMediaQueryList),
-  })
-
-  return {
-    setMatches: (value: boolean) => {
-      current = value
-      const event = createEvent(value)
-      listeners.forEach((listener) => listener(event))
-    },
-    restore: () => {
-      if (original) {
-        window.matchMedia = original
-      } else {
-        delete (window as { matchMedia?: typeof window.matchMedia }).matchMedia
-      }
-    },
-  }
-}
-
-const createMockContext = (): CanvasRenderingContext2D => {
+const createMockContext = () => {
   const canvas = document.createElement('canvas')
-  canvas.width = 800
-  canvas.height = 600
+  canvas.width = 720
+  canvas.height = 1280
 
   const gradient = { addColorStop: vi.fn() }
-  const pattern = { setTransform: vi.fn() }
 
   const context: Partial<CanvasRenderingContext2D> = {
     canvas,
     clearRect: vi.fn(),
     createLinearGradient: vi.fn(() => gradient as unknown as CanvasGradient),
     createRadialGradient: vi.fn(() => gradient as unknown as CanvasGradient),
-    createPattern: vi.fn(() => pattern as unknown as CanvasPattern),
     fillRect: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
@@ -94,84 +38,91 @@ const createMockContext = (): CanvasRenderingContext2D => {
     closePath: vi.fn(),
     fill: vi.fn(),
     save: vi.fn(),
-    translate: vi.fn(),
     restore: vi.fn(),
     arc: vi.fn(),
     ellipse: vi.fn(),
-    roundRect: vi.fn(),
-    rect: vi.fn(),
-    fillText: vi.fn(),
-    drawImage: vi.fn(),
   }
 
   ;(context as { fillStyle: unknown }).fillStyle = ''
   ;(context as { strokeStyle: unknown }).strokeStyle = ''
   ;(context as { lineWidth: number }).lineWidth = 0
-  ;(context as { font: string }).font = ''
-  ;(context as { textAlign: CanvasTextAlign }).textAlign = 'left'
-  ;(context as { textBaseline: CanvasTextBaseline }).textBaseline = 'alphabetic'
   ;(context as { globalAlpha: number }).globalAlpha = 1
 
   return context as CanvasRenderingContext2D
 }
 
 const createState = (): WorldState => ({
-  seed: 'test',
-  time: 1,
-  beat: 0,
+  seed: 'state',
+  time: 12,
+  beat: 48,
   status: 'running',
-  stage: { width: 800, height: 600, groundHeight: 100, groundY: 500 },
-  player: {
-    position: { x: 100, y: 400 },
-    velocity: { x: 0, y: 0 },
-    width: 40,
-    height: 60,
-    onGround: true,
-    coyoteTimer: 0,
-    jumpBufferTimer: 0,
-    alive: true,
+  stage: {
+    width: 720,
+    height: 1280,
+    hitLineY: 1280 * 0.88,
+    laneWidth: (720 - 48) / 4,
+    lanePadding: 24,
+    laneCount: 4,
+    scrollSpeed: 720,
   },
-  obstacles: [],
-  flashes: [],
-  score: 0,
-  combo: 0,
-  bestCombo: 0,
+  lanes: { count: 4 },
+  notes: [],
+  runner: {
+    lane: 1,
+    targetLane: 1,
+    transitionFrom: 1,
+    transitionStart: 11.5,
+    transitionDuration: 0,
+    combo: 8,
+    bestCombo: 12,
+    score: 4200,
+    perfectHits: 20,
+    goodHits: 4,
+    missHits: 1,
+  },
+  feedback: [],
+  accuracy: 0.97,
 })
 
-describe('SceneRenderer reduced motion', () => {
-  it('uses animated sine waves when reduced motion is off', () => {
-    const controls = setupMatchMedia(false)
-    const sinSpy = vi.spyOn(Math, 'sin')
-    const cosSpy = vi.spyOn(Math, 'cos')
+afterEach(() => {
+  unsubscribe.mockClear()
+  listeners.clear()
+})
 
-    const renderer = new SceneRenderer(createMockContext())
-    try {
-      renderer.render(createState())
+describe('SceneRenderer', () => {
+  it('draws lanes and hitbar for the current stage', () => {
+    const ctx = createMockContext()
+    const renderer = new SceneRenderer(ctx)
 
-      expect(sinSpy).toHaveBeenCalled()
-      expect(cosSpy).toHaveBeenCalled()
-    } finally {
-      renderer.dispose()
-      controls.restore()
-      vi.restoreAllMocks()
-    }
+    const state = createState()
+
+    renderer.render(state)
+
+    const fillRectMock = ctx.fillRect as unknown as Mock<[number, number, number, number]>
+    const laneFillCalls = fillRectMock.mock.calls.filter((call) => Math.abs(call[2] - state.stage.laneWidth) < 0.5)
+    expect(laneFillCalls).toHaveLength(4)
+    const { stage } = state
+    laneFillCalls.forEach((call, index) => {
+      const expectedX = stage.lanePadding + stage.laneWidth * index
+      expect(call[0]).toBeCloseTo(expectedX)
+      expect(call[1]).toBe(0)
+      expect(call[2]).toBeCloseTo(stage.laneWidth)
+    })
+
+    const hitbarY = stage.height - stage.height * 0.12
+    const hitbarCall = fillRectMock.mock.calls.find((call) => Math.abs(call[1] - hitbarY) < 0.5)
+    expect(hitbarCall).toBeDefined()
+
+    renderer.dispose()
   })
 
-  it('skips sine-based animations when reduced motion is preferred', () => {
-    const controls = setupMatchMedia(true)
-    const sinSpy = vi.spyOn(Math, 'sin')
-    const cosSpy = vi.spyOn(Math, 'cos')
+  it('unsubscribes from reduced motion listeners on dispose', () => {
+    const ctx = createMockContext()
+    const renderer = new SceneRenderer(ctx)
 
-    const renderer = new SceneRenderer(createMockContext())
-    try {
-      renderer.render(createState())
+    renderer.dispose()
 
-      expect(sinSpy).not.toHaveBeenCalled()
-      expect(cosSpy).not.toHaveBeenCalled()
-    } finally {
-      renderer.dispose()
-      controls.restore()
-      vi.restoreAllMocks()
-    }
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(listeners.size).toBe(0)
   })
 })

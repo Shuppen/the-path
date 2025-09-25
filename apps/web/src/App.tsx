@@ -1,82 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DevicePerformanceProfile, ViewportMetrics } from '@the-path/types'
-import {
-  areViewportMetricsEqual,
-  getDevicePerformanceProfile,
-  getViewportMetrics,
-  resizeCanvasToDisplaySize,
-} from '@the-path/utils'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 
-import { createSeed } from './core/prng'
-import { createGameLoop } from './engine/loop'
-import { InputManager } from './engine/input'
-import { SceneRenderer } from './render/sceneRenderer'
-import { World, type WorldSnapshot } from './world'
-import { WebAudioAnalysis, type AudioPlaybackState, type ProgressEvent as AudioProgressEvent } from './audio/WebAudioAnalysis'
-import { DEFAULT_TRACK_ID, TRACK_MANIFEST, type AudioTrackManifestEntry } from './assets/tracks'
-import CanvasRecorder, { type RecorderState } from './share/CanvasRecorder'
-
-import BottomSheet from './ui/BottomSheet'
-import TrackUpload from './ui/TrackUpload'
-import { LeadersBoard } from './ui/LeadersBoard'
-import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
-import useMediaQuery from './hooks/useMediaQuery'
-import { useCanvasPerformanceMonitor } from './hooks/useCanvasPerformanceMonitor'
-import CanvasDiagnosticsOverlay from './components/canvas/CanvasDiagnosticsOverlay'
-import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import {
-  type StoredRecentTrack,
+  DEFAULT_TRACK_ID,
+  TRACK_MANIFEST,
+  getTrackById,
+  type AudioTrackManifestEntry,
+} from './assets/tracks'
+import { WebAudioAnalysis } from './audio/WebAudioAnalysis'
+import {
   MAX_RECENT_TRACKS,
   readRecentTracks,
   toManifest,
   upsertRecentTrack,
   writeRecentTracks,
+  type StoredRecentTrack,
 } from './audio/recentTracks'
-import { padScore } from './ui/scoreFormatting'
+import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
+import { createSeed } from './core/prng'
+import { getPrefersReducedMotion, setReducedMotionOverride } from './environment/reducedMotion'
+import type { WorldSnapshot } from './world'
 
-const clamp01 = (value: number): number => {
-  if (Number.isNaN(value)) return 0
-  if (value < 0) return 0
-  if (value > 1) return 1
-  return value
-}
+import HomeScreen from './screens/Home'
+import SongSelectScreen from './screens/SongSelect'
+import GameScreen from './screens/Game'
+import ResultsScreen from './screens/Results'
+import SettingsScreen from './screens/Settings'
 
-const shouldUpdateProfile = (
-  previous: DevicePerformanceProfile,
-  next: DevicePerformanceProfile,
-): boolean => {
-  if (previous === next) return false
-  if (previous.tier !== next.tier) return true
-  if (previous.pixelBudget !== next.pixelBudget) return true
-  if (Math.abs(previous.recommendedDevicePixelRatio - next.recommendedDevicePixelRatio) > 0.05) return true
-  if (previous.isMobile !== next.isMobile) return true
-  if (previous.prefersReducedMotion !== next.prefersReducedMotion) return true
-  return false
-}
+type Screen = 'home' | 'song-select' | 'game' | 'results' | 'settings'
 
-const formatTime = (value: number): string => {
-  if (!Number.isFinite(value) || value <= 0) return '0:00'
-  const totalSeconds = Math.floor(value)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`
-}
-
-const describeAudioState = (state: AudioPlaybackState): string => {
-  switch (state) {
-    case 'loading':
-      return 'Loading track…'
-    case 'ready':
-      return 'Ready to play'
-    case 'playing':
-      return 'Playing'
-    case 'paused':
-      return 'Paused'
-    case 'ended':
-      return 'Playback finished'
-    default:
-      return 'Idle'
-  }
+interface GameResult {
+  track: AudioTrackManifestEntry
+  snapshot: WorldSnapshot
 }
 
 const deriveTrackTitle = (fileName: string): string => {
@@ -91,184 +45,184 @@ const deriveTrackTitle = (fileName: string): string => {
     .join(' ')
 }
 
+const formatTime = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return '0:00'
+  const totalSeconds = Math.floor(value)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
 const describeUploadedTrack = (duration: number, bpm: number): string => {
   const roundedBpm = Math.round(bpm)
   return `User uploaded · ${formatTime(duration)} · ~${roundedBpm} BPM`
 }
 
-const classNames = (...classes: Array<string | false | null | undefined>): string =>
-  classes.filter(Boolean).join(' ')
-
 interface StatusMarqueeProps {
   message: string
   prefersReducedMotion: boolean
-  className?: string
-  innerClassName?: string
 }
 
-export const StatusMarquee = ({
-  message,
-  prefersReducedMotion,
-  className,
-  innerClassName,
-}: StatusMarqueeProps) => {
-  const [isOverflowing, setIsOverflowing] = useState(false)
-  const contentRef = useRef<HTMLDivElement | null>(null)
+export function StatusMarquee({ message, prefersReducedMotion }: StatusMarqueeProps) {
+  const contentRef = useRef<HTMLSpanElement | null>(null)
+  const [shouldAnimate, setShouldAnimate] = useState(false)
 
   useEffect(() => {
-    const node = contentRef.current
-
-    if (!node) {
-      setIsOverflowing(false)
+    const element = contentRef.current
+    if (!element) {
       return
     }
 
-    const calculateOverflow = () => {
-      const nextIsOverflowing = node.scrollWidth > node.clientWidth
-      setIsOverflowing((previous) => (previous === nextIsOverflowing ? previous : nextIsOverflowing))
+    const evaluate = () => {
+      if (!contentRef.current) return
+      if (prefersReducedMotion) {
+        setShouldAnimate(false)
+        return
+      }
+      const { clientWidth, scrollWidth } = contentRef.current
+      setShouldAnimate(scrollWidth - clientWidth > 1)
     }
 
-    calculateOverflow()
-
-    if (typeof ResizeObserver === 'undefined') {
-      return
-    }
+    evaluate()
 
     const observer = new ResizeObserver(() => {
-      calculateOverflow()
+      evaluate()
     })
-    observer.observe(node)
+
+    observer.observe(element)
 
     return () => {
       observer.disconnect()
     }
-  }, [message])
+  }, [prefersReducedMotion, message])
 
-  const shouldAnimate = isOverflowing && !prefersReducedMotion
+  const animationStyle = prefersReducedMotion || !shouldAnimate ? 'none' : 'status-marquee 20s linear infinite'
 
   return (
-    <div className={classNames('relative overflow-hidden', className)}>
-      <div
+    <div className="relative overflow-hidden whitespace-nowrap">
+      <span
         ref={contentRef}
-        className={classNames('flex min-w-full flex-nowrap gap-8 whitespace-nowrap', innerClassName)}
         data-testid="status-marquee-content"
-        style={
-          shouldAnimate
-            ? { animation: 'status-marquee 20s linear infinite' }
-            : { animation: 'none', transform: 'translateX(0)' }
-        }
+        className="inline-flex items-center gap-6 text-sm text-slate-300"
+        style={{ animation: animationStyle }}
       >
-        <span className="flex-shrink-0">{message}</span>
-        {shouldAnimate ? (
-          <span className="flex-shrink-0" aria-hidden="true">
-            {message}
-          </span>
-        ) : null}
-      </div>
+        {message}
+        {!prefersReducedMotion && shouldAnimate ? <span aria-hidden="true">{message}</span> : null}
+      </span>
     </div>
   )
 }
 
-export function App() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const metricsRef = useRef<ViewportMetrics | null>(null)
-  const worldRef = useRef<World | null>(null)
-  const inputRef = useRef<InputManager | null>(null)
-  const seedRef = useRef<string>(createSeed())
-  const audioRef = useRef<WebAudioAnalysis | null>(null)
-  const recorderRef = useRef<CanvasRecorder | null>(null)
-  const [canvasMetrics, setCanvasMetrics] = useState<ViewportMetrics | null>(null)
-  const [deviceProfile, setDeviceProfile] = useState<DevicePerformanceProfile>(() => getDevicePerformanceProfile())
-  const deviceProfileRef = useRef<DevicePerformanceProfile>(deviceProfile)
-
-  const prefersReducedMotion = usePrefersReducedMotion()
-
-  if (typeof window !== 'undefined' && audioRef.current === null) {
-    audioRef.current = new WebAudioAnalysis()
+const resolveAudio = (ref: MutableRefObject<WebAudioAnalysis | null>): WebAudioAnalysis => {
+  if (!ref.current) {
+    ref.current = new WebAudioAnalysis()
   }
+  return ref.current
+}
 
-  const audioSupported = audioRef.current?.isSupported() ?? false
-  const defaultTrack = TRACK_MANIFEST.find((track) => track.id === DEFAULT_TRACK_ID) ?? TRACK_MANIFEST[0]
-  const [selectedTrackId, setSelectedTrackId] = useState<string>(defaultTrack?.id ?? DEFAULT_TRACK_ID)
+export function App() {
+  const audioRef = useRef<WebAudioAnalysis | null>(null)
+  const audio = resolveAudio(audioRef)
+
+  const audioSupported = audio.isSupported()
+
+  const [screen, setScreen] = useState<Screen>(() => {
+    if (typeof window === 'undefined') {
+      return 'home'
+    }
+    const params = new URLSearchParams(window.location.search)
+    const requested = params.get('screen')
+    if (requested === 'game' || requested === 'song-select' || requested === 'results' || requested === 'settings') {
+      return requested
+    }
+    if (params.has('autostart')) {
+      return 'game'
+    }
+    return 'home'
+  })
+  const [selectedTrackId, setSelectedTrackId] = useState<string>(DEFAULT_TRACK_ID)
   const [uploadedTracks, setUploadedTracks] = useState<AudioTrackManifestEntry[]>([])
   const [recentTracks, setRecentTracks] = useState<StoredRecentTrack[]>(() => readRecentTracks())
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [gameResult, setGameResult] = useState<GameResult | null>(null)
+  const [lastTrackId, setLastTrackId] = useState<string | null>(null)
   const [isProcessingUpload, setIsProcessingUpload] = useState(false)
-  const selectedTrack = useMemo(() => {
-    const uploaded = uploadedTracks.find((track) => track.id === selectedTrackId)
-    if (uploaded) return uploaded
-    return TRACK_MANIFEST.find((track) => track.id === selectedTrackId) ?? defaultTrack
-  }, [uploadedTracks, selectedTrackId, defaultTrack])
-  const [audioState, setAudioState] = useState<AudioPlaybackState>(
-    () => audioRef.current?.getState() ?? 'idle',
-  )
-  const [audioProgress, setAudioProgress] = useState<AudioProgressEvent>(() => {
-    const duration = audioRef.current?.getDuration() ?? selectedTrack?.duration ?? 0
-    const time = audioRef.current?.getCurrentTime() ?? 0
-    const progress = duration > 0 ? clamp01(time / duration) : 0
-    return { time, duration, progress }
-  })
-  const [worldReady, setWorldReady] = useState(false)
-
-  const [recordingState, setRecordingState] = useState<RecorderState>('idle')
-  const [recordingSupported, setRecordingSupported] = useState(false)
-  const [recordingError, setRecordingError] = useState<string | null>(null)
-  const [bufferInfo, setBufferInfo] = useState({ duration: 0, limit: 20 })
-  const [isSavingClip, setIsSavingClip] = useState(false)
-
-  const [hud, setHud] = useState<WorldSnapshot>(() => ({
-    score: 0,
-    combo: 0,
-    bestCombo: 0,
-    status: 'menu',
-    seed: seedRef.current,
-    sessionBestScore: 0,
-    personalBestScore: 0,
-  }))
-
-
-  const performanceSample = useCanvasPerformanceMonitor({
-    enabled: worldReady,
-    sampleIntervalMs: deviceProfile.tier === 'low' ? 1400 : 900,
-  })
-
-  const isWideMobile = useMediaQuery('(min-width: 480px)')
-  const isTabletOrLarger = useMediaQuery('(min-width: 640px)')
-
-  const [isSheetOpen, setSheetOpen] = useState(false)
-
-  const canvasAspectStyle = useMemo(
-    () => ({ aspectRatio: isWideMobile ? '18 / 9' : '16 / 9' }),
-    [isWideMobile]
-  )
-
-  useEffect(() => {
-
-    deviceProfileRef.current = deviceProfile
-  }, [deviceProfile])
-
-  useEffect(() => {
-    if (isTabletOrLarger) {
-      setSheetOpen(false)
-    }
-  }, [isTabletOrLarger])
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [dprCap, setDprCap] = useState(1.5)
+  const [reducedMotionEnabled, setReducedMotionEnabled] = useState<boolean>(() => getPrefersReducedMotion())
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
   }, [recentTracks])
 
   useEffect(() => {
-    const hasUploaded = uploadedTracks.some((track) => track.id === selectedTrackId)
-    const hasBuiltIn = TRACK_MANIFEST.some((track) => track.id === selectedTrackId)
-    if (!hasUploaded && !hasBuiltIn && selectedTrack) {
-      setSelectedTrackId(selectedTrack.id)
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const requested = params.get('screen')
+    if (requested === 'game' || requested === 'song-select' || requested === 'results' || requested === 'settings') {
+      setScreen(requested)
+    } else if (params.has('autostart')) {
+      setScreen('game')
     }
-  }, [selectedTrackId, uploadedTracks, selectedTrack])
+  }, [])
+
+  useEffect(() => {
+    setReducedMotionOverride(reducedMotionEnabled)
+  }, [reducedMotionEnabled])
+
+  const resolveTrackById = useCallback(
+    (id: string): AudioTrackManifestEntry | undefined =>
+      uploadedTracks.find((track) => track.id === id) ?? getTrackById(id) ?? uploadedTracks[0] ?? TRACK_MANIFEST[0],
+    [uploadedTracks],
+  )
+
+  const selectedTrack = useMemo(() => resolveTrackById(selectedTrackId), [resolveTrackById, selectedTrackId])
+
+  useEffect(() => {
+    if (!selectedTrack) {
+      const fallback = uploadedTracks[0] ?? TRACK_MANIFEST[0]
+      if (fallback) {
+        setSelectedTrackId(fallback.id)
+      }
+    }
+  }, [selectedTrack, uploadedTracks])
+
+
+  const handleStartGame = useCallback(() => {
+    if (!selectedTrack) return
+    setGameResult(null)
+    setScreen('game')
+  }, [selectedTrack])
+
+  const handleShowResults = useCallback(
+    (snapshot: WorldSnapshot) => {
+      if (!selectedTrack) return
+      setSelectedTrackId(selectedTrack.id)
+      setGameResult({ track: selectedTrack, snapshot })
+      setLastTrackId(selectedTrack.id)
+      setScreen('results')
+    },
+    [selectedTrack],
+  )
+
+  const handleExitGame = useCallback(
+    (snapshot: WorldSnapshot | null) => {
+      if (selectedTrack) {
+        setLastTrackId(selectedTrack.id)
+      }
+      if (snapshot && selectedTrack) {
+        setSelectedTrackId(selectedTrack.id)
+        setGameResult({ track: selectedTrack, snapshot })
+        setScreen('results')
+        return
+      }
+      setScreen('home')
+    },
+    [selectedTrack],
+  )
 
   const handleUploadFile = useCallback(
     async (file: File) => {
-      const audio = audioRef.current
-      if (!audio || !audioSupported) {
+      if (!audioSupported) {
         setUploadError('Web Audio API недоступна в этом браузере.')
         return
       }
@@ -295,9 +249,7 @@ export function App() {
         }
 
         setUploadedTracks((previous) => {
-          const retained = previous.filter(
-            (track) => track.id !== manifest.id && audio.hasCustomTrack(track.id),
-          )
+          const retained = previous.filter((track) => track.id !== manifest.id && audio.hasCustomTrack(track.id))
           return [manifest, ...retained].slice(0, MAX_RECENT_TRACKS)
         })
 
@@ -322,13 +274,12 @@ export function App() {
         setIsProcessingUpload(false)
       }
     },
-    [audioSupported],
+    [audio, audioSupported],
   )
 
   const handleSelectRecentTrack = useCallback(
     (entry: StoredRecentTrack) => {
-      const audio = audioRef.current
-      if (!audio || !audioSupported) {
+      if (!audioSupported) {
         setUploadError('Web Audio API недоступна в этом браузере.')
         return
       }
@@ -342,10 +293,7 @@ export function App() {
         if (previous.some((track) => track.id === entry.id)) {
           return previous.filter((track) => audio.hasCustomTrack(track.id))
         }
-        const manifest = {
-          ...toManifest(entry),
-          description: describeUploadedTrack(entry.duration, entry.bpm),
-        }
+        const manifest = { ...toManifest(entry), description: describeUploadedTrack(entry.duration, entry.bpm) }
         const retained = previous.filter((track) => audio.hasCustomTrack(track.id))
         return [manifest, ...retained].slice(0, MAX_RECENT_TRACKS)
       })
@@ -353,1035 +301,70 @@ export function App() {
       setUploadError(null)
       setSelectedTrackId(entry.id)
     },
-    [audioSupported],
+    [audio, audioSupported],
   )
 
-  const pushHud = useCallback((world: World) => {
-    const snapshot = world.snapshot()
-    setHud((previous) => {
-      if (
-        previous.score === snapshot.score &&
-        previous.combo === snapshot.combo &&
-        previous.bestCombo === snapshot.bestCombo &&
-        previous.status === snapshot.status &&
-        previous.seed === snapshot.seed &&
-        previous.sessionBestScore === snapshot.sessionBestScore &&
-        previous.personalBestScore === snapshot.personalBestScore
-      ) {
-        return previous
-      }
-      return snapshot
-    })
+  const handleChangeDpr = useCallback((value: number) => {
+    setDprCap(value)
   }, [])
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return undefined
-
-    const recorder = new CanvasRecorder(canvas, {
-      bufferDuration: 20,
-      audioStreamFactory: () => {
-        const audio = audioRef.current
-        if (!audio || !audio.isSupported()) return null
-        const recording = audio.createRecordingStream()
-        if (!recording) return null
-        return {
-          stream: recording.stream,
-          cleanup: recording.disconnect,
-        }
-      },
-    })
-
-    recorderRef.current = recorder
-    const supported = recorder.isSupported()
-    setRecordingSupported(supported)
-    if (!supported) {
-      setRecordingError('Recording is not supported in this browser')
-    }
-    setBufferInfo({ duration: recorder.getBufferedTime(), limit: recorder.getBufferDuration() })
-
-    const detachState = recorder.onStateChange((state) => {
-      setRecordingState(state)
-      if (state === 'recording') {
-        setRecordingError(null)
-      }
-    })
-    const detachBuffer = recorder.onBufferUpdate((info) => {
-      setBufferInfo(info)
-    })
-    const detachError = recorder.onError(({ error }) => {
-      setRecordingError(error.message)
-    })
-
-    return () => {
-      detachState()
-      detachBuffer()
-      detachError()
-      recorder.destroy()
-      if (recorderRef.current === recorder) {
-        recorderRef.current = null
-      }
-    }
+  const handleToggleReducedMotion = useCallback((value: boolean) => {
+    setReducedMotionEnabled(value)
   }, [])
 
-  useEffect(() => {
-    const audio = audioRef.current
-    if (!audio || !audio.isSupported()) return undefined
-
-    setAudioState(audio.getState())
-    setAudioProgress({
-      time: audio.getCurrentTime(),
-      duration: audio.getDuration(),
-      progress: audio.getDuration() > 0 ? clamp01(audio.getCurrentTime() / audio.getDuration()) : 0,
-    })
-
-    const detachProgress = audio.onProgress((event) => {
-      setAudioProgress(event)
-    })
-    const detachState = audio.onStateChange((state) => {
-      setAudioState(state)
-    })
-
-    return () => {
-      detachProgress()
-      detachState()
-    }
-  }, [])
-
-  const resetAudioTimeline = useCallback(
-    ({ resumeWhenEnded = true }: { resumeWhenEnded?: boolean } = {}) => {
-      const audio = audioRef.current
-      if (!audio || !audioSupported) {
-        setAudioProgress((previous) => ({
-          ...previous,
-          time: 0,
-          progress: 0,
-        }))
-        return
-      }
-
-      const previousState = audio.getState()
-      audio.setCurrentTime(0)
-
-      if (previousState === 'ended' && resumeWhenEnded) {
-        audio.play().catch((error) => {
-          console.error(error)
-        })
-      }
-    },
-    [audioSupported],
-  )
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return undefined
-
-    const commitProfile = (profile: DevicePerformanceProfile) => {
-      deviceProfileRef.current = profile
-      setDeviceProfile((previous) => (shouldUpdateProfile(previous, profile) ? profile : previous))
-    }
-
-    const commitMetrics = (next: ViewportMetrics) => {
-      metricsRef.current = next
-      setCanvasMetrics((previous) => (areViewportMetricsEqual(previous, next) ? previous : next))
-    }
-
-    const initialProfile = getDevicePerformanceProfile({
-      canvasWidth: canvas.clientWidth,
-      canvasHeight: canvas.clientHeight,
-      devicePixelRatio: globalThis.devicePixelRatio ?? 1,
-    })
-    commitProfile(initialProfile)
-
-    const initialMetrics = getViewportMetrics(canvas, {
-      performanceProfile: initialProfile,
-      pixelBudget: initialProfile.pixelBudget,
-    })
-    resizeCanvasToDisplaySize(canvas, initialMetrics)
-    commitMetrics(initialMetrics)
-
-    const contextAttributes: CanvasRenderingContext2DSettings = { alpha: false }
-    if (initialProfile.tier === 'low') {
-      contextAttributes.desynchronized = true
-    }
-    const context =
-      canvas.getContext('2d', contextAttributes) ?? canvas.getContext('2d', { alpha: false })
-    if (!context) {
-      return undefined
-    }
-
-    const world = new World({
-      seed: seedRef.current,
-      width: canvas.width || Math.max(initialMetrics.width, 1),
-      height: canvas.height || Math.max(initialMetrics.height, 1),
-    })
-    worldRef.current = world
-    world.setViewport(canvas.width, canvas.height)
-
-    const audio = audioRef.current
-    let detachAudioEvents: (() => void) | undefined
-    if (audio && audio.isSupported()) {
-      world.attachTimeSource(() => {
-        const state = audio.getState()
-        if (state === 'idle' || state === 'loading') return null
-        return audio.getCurrentTime()
-      })
-      const detachBeat = audio.onBeat(({ time, confidence }) => {
-        world.syncToBeat(time, confidence)
-      })
-      const detachEnergy = audio.onEnergySpike(({ intensity }) => {
-        world.applyEnergySpike(intensity)
-      })
-      const detachBreak = audio.onBreak(({ duration }) => {
-        world.applyBreak(duration)
-      })
-      detachAudioEvents = () => {
-        detachBeat()
-        detachEnergy()
-        detachBreak()
-      }
-    } else {
-      world.attachTimeSource(undefined)
-    }
-
-    const renderer = new SceneRenderer(context)
-    const input = new InputManager(canvas, () => metricsRef.current)
-    input.bind()
-    inputRef.current = input
-
-    const updateHud = () => pushHud(world)
-    updateHud()
-    renderer.render(world.state)
-
-    const updateMetrics = () => {
-      const profile = getDevicePerformanceProfile({
-        canvasWidth: canvas.clientWidth,
-        canvasHeight: canvas.clientHeight,
-        devicePixelRatio: metricsRef.current?.devicePixelRatio ?? globalThis.devicePixelRatio ?? 1,
-        pixelBudget: deviceProfileRef.current.pixelBudget,
-      })
-      commitProfile(profile)
-      const next = getViewportMetrics(canvas, {
-        performanceProfile: profile,
-        pixelBudget: profile.pixelBudget,
-      })
-      resizeCanvasToDisplaySize(canvas, next)
-      commitMetrics(next)
-      world.setViewport(canvas.width, canvas.height)
-    }
-
-    let resizeObserver: ResizeObserver | undefined
-    let resizeFrame = 0
-    let pendingResize = false
-
-    const enqueueMetricsUpdate = () => {
-      if (pendingResize) return
-      pendingResize = true
-      resizeFrame = requestAnimationFrame(() => {
-        pendingResize = false
-        updateMetrics()
-      })
-    }
-
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => enqueueMetricsUpdate())
-      resizeObserver.observe(canvas)
-    }
-
-    window.addEventListener('resize', enqueueMetricsUpdate)
-    window.addEventListener('orientationchange', enqueueMetricsUpdate)
-
-    const handleRunRestart = () => {
-      resetAudioTimeline()
-    }
-
-    const loop = createGameLoop(
-      {
-        update: (dt) => {
-          input.setStatus(world.state.status)
-          const snapshot = input.consumeActions()
-
-          world.update({
-            ...snapshot,
-            dt,
-            onRunRestart: handleRunRestart,
-          })
-          if (world.consumePendingReset()) {
-            resetAudioTimeline()
-          }
-
-          updateHud()
-        },
-        render: (alpha) => {
-          renderer.render(world.state, alpha)
-        },
-      },
-      {
-        performanceProfile: () => deviceProfileRef.current,
-      },
-    )
-    loop.start()
-    setWorldReady(true)
-
-    return () => {
-      loop.stop()
-      renderer.dispose()
-      input.unbind()
-      if (inputRef.current === input) {
-        inputRef.current = null
-      }
-      if (resizeObserver) {
-        resizeObserver.disconnect()
-      }
-      window.removeEventListener('resize', enqueueMetricsUpdate)
-      window.removeEventListener('orientationchange', enqueueMetricsUpdate)
-      if (resizeFrame) {
-        cancelAnimationFrame(resizeFrame)
-      }
-      if (detachAudioEvents) detachAudioEvents()
-      setWorldReady(false)
-      if (worldRef.current === world) worldRef.current = null
-      metricsRef.current = null
-    }
-  }, [pushHud, resetAudioTimeline])
-
-  useEffect(() => {
-    const audio = audioRef.current
-    if (!audio || !selectedTrack) return undefined
-
-    if (!audio.isSupported()) {
-      setAudioProgress({ time: 0, duration: selectedTrack.duration, progress: 0 })
-      void audio.load(selectedTrack)
-      return undefined
-    }
-
-    let cancelled = false
-
-    void audio.load(selectedTrack).then(() => {
-      if (cancelled) return
-      setAudioProgress({
-        time: audio.getCurrentTime(),
-        duration: audio.getDuration(),
-        progress: audio.getDuration() > 0 ? clamp01(audio.getCurrentTime() / audio.getDuration()) : 0,
-      })
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [selectedTrack])
-
-  useEffect(() => {
-    const world = worldRef.current
-    if (!world || !selectedTrack) return
-    world.reset(undefined, { bpm: selectedTrack.bpm })
-  }, [selectedTrack, worldReady])
-
-  const handleStartRun = useCallback(() => {
-    inputRef.current?.requestStart()
-  }, [])
-
-  const handlePauseRun = useCallback(() => {
-    inputRef.current?.requestPause()
-  }, [])
-
-  const handleRestart = useCallback(() => {
-    const world = worldRef.current
-    if (!world) return
-    resetAudioTimeline()
-    world.reset()
-    pushHud(world)
-  }, [pushHud, resetAudioTimeline])
-
-  const handleNewSeed = useCallback(() => {
-    const world = worldRef.current
-    if (!world) return
-    resetAudioTimeline()
-    const nextSeed = createSeed()
-    seedRef.current = nextSeed
-    resetAudioTimeline()
-    world.reset(nextSeed)
-    pushHud(world)
-  }, [pushHud, resetAudioTimeline])
-
-  const handleTogglePlayback = useCallback(() => {
-    const audio = audioRef.current
-    const world = worldRef.current
-    if (!audio || !selectedTrack || !audio.isSupported()) return
-
-    const state = audio.getState()
-    if (state === 'idle' || state === 'loading') {
-      return
-    }
-
-    if (state === 'playing') {
-      audio.pause()
-      return
-    }
-
-    if (state === 'ended') {
-      audio.setCurrentTime(0)
-      world?.reset(undefined, { bpm: selectedTrack.bpm })
-    }
-
-    audio.play().catch((error) => {
-      console.error(error)
-    })
-  }, [selectedTrack])
-
-  const handleRestartTrack = useCallback(() => {
-    const audio = audioRef.current
-    const world = worldRef.current
-    if (!audio || !selectedTrack) return
-
-    audio.stop()
-    audio.setCurrentTime(0)
-    world?.reset(undefined, { bpm: selectedTrack.bpm })
-    setAudioProgress({
-      time: 0,
-      duration: audio.getDuration(),
-      progress: 0,
-    })
-  }, [selectedTrack])
-
-  const handleSelectTrack = useCallback((trackId: string) => {
-    setUploadError(null)
-    setSelectedTrackId(trackId)
-  }, [])
-
-  const handleToggleRecording = useCallback(() => {
-    const recorder = recorderRef.current
-    if (!recorder) return
-    if (recorder.getState() === 'recording') {
-      recorder.stop()
-      return
-    }
-    const started = recorder.start()
-    if (!started) {
-      setRecordingError(recorder.getLastError()?.message ?? 'Unable to start recording')
-    }
-  }, [])
-
-  const handleSaveClip = useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder) return
-    try {
-      setRecordingError(null)
-      setIsSavingClip(true)
-      const blob = recorder.exportClip()
-      if (!blob || blob.size === 0) {
-        setRecordingError('No recording data available yet')
-        return
-      }
-      const fileName = `the-path-${Date.now()}.webm`
-      if (
-        typeof navigator !== 'undefined' &&
-        typeof navigator.canShare === 'function' &&
-        typeof navigator.share === 'function' &&
-        typeof File !== 'undefined'
-      ) {
-        const file = new File([blob], fileName, { type: blob.type })
-        const shareData = { files: [file], title: 'The Path clip' }
-        if (navigator.canShare(shareData)) {
-          await navigator.share(shareData)
-          return
-        }
-      }
-
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = fileName
-      document.body.appendChild(anchor)
-      anchor.click()
-      document.body.removeChild(anchor)
-      setTimeout(() => {
-        URL.revokeObjectURL(url)
-      }, 1000)
-    } catch (error) {
-      setRecordingError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsSavingClip(false)
-    }
-  }, [])
-
-  const playbackStatus = audioSupported ? describeAudioState(audioState) : 'Audio unavailable'
-  const bufferLimit = bufferInfo.limit > 0 ? bufferInfo.limit : 0
-  const bufferedSeconds = bufferLimit > 0 ? Math.min(bufferInfo.duration, bufferLimit) : bufferInfo.duration
-  const bufferRatio = bufferLimit > 0 && Number.isFinite(bufferLimit)
-    ? Math.min(bufferedSeconds / bufferLimit, 1)
-    : 0
-  const recordButtonLabel = recordingState === 'recording' ? 'Stop recording' : 'Record gameplay'
-  const recordingStatus = !recordingSupported
-    ? 'Recording unavailable'
-    : isSavingClip
-      ? 'Saving clip…'
-      : recordingState === 'recording'
-        ? 'Recording in progress'
-        : recordingError
-          ? 'Recorder error'
-          : 'Recorder idle'
-  const saveDisabled = !recordingSupported || bufferInfo.duration <= 0 || isSavingClip
-  const bufferedLabel = Number.isFinite(bufferedSeconds) ? bufferedSeconds.toFixed(1) : '0.0'
-  const bufferLimitLabel = Number.isFinite(bufferLimit) ? bufferLimit.toFixed(0) : '0'
-
-  const statusMessage = (() => {
-    if (hud.status === 'menu') {
-      return 'Navigation idle · tap or press Space to start the run'
-    }
-    if (hud.status === 'paused') {
-      return 'Run paused · tap or press Space to resume'
-    }
-    if (hud.status === 'gameover') {
-      return 'Signal lost · tap or press Space/R to restart'
-    }
-    if (!audioSupported) {
-      return 'Web audio unavailable · generator runs on default tempo'
-    }
-    if (audioState === 'loading') {
-      return 'Analyzing track · hold tight for beat data'
-    }
-    if (audioState === 'playing') {
-      return 'Stay in rhythm · jump with Space, click or tap'
-    }
-    return 'Audio paused · resume playback to sync obstacles'
-  })()
-
-  const isInMenu = hud.status === 'menu'
-  const isPaused = hud.status === 'paused'
-  const showStartOverlay = isInMenu || isPaused
-  const showHudPanels = hud.status === 'running' || hud.status === 'gameover'
-  const startOverlayPrimary = isPaused ? 'Tap to resume' : 'Tap to start'
-  const startOverlaySecondary = isPaused
-    ? 'Press Space or click to continue your route.'
-    : 'Press Space or click to launch the route.'
-  const startOverlayHint = 'Pause with Esc, right click, or a two-finger tap.'
-
-  const telemetryItems = [
-    {
-      key: 'score',
-      label: 'Score',
-      value: padScore(hud.score),
-      description: 'Current run total',
-    },
-    {
-      key: 'combo',
-      label: 'Combo',
-      value: `x${hud.combo}`,
-      description: 'Active streak',
-    },
-    {
-      key: 'best',
-      label: 'Best',
-      value: `x${hud.bestCombo}`,
-      description: 'Session record',
-    },
-    {
-      key: 'seed',
-      label: 'Seed',
-      value: hud.seed,
-      description: 'Procedural key',
-    },
-    {
-      key: 'session-best-score',
-      label: 'Session best',
-      value: padScore(hud.sessionBestScore),
-      description: 'Highest score this session',
-    },
-    {
-      key: 'personal-best-score',
-      label: 'Personal best',
-      value: padScore(hud.personalBestScore),
-      description: 'Stored local record',
-    },
-  ] as const
-
-  const renderTrackSummary = () => (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-accent-cyan/80">Soundtrack</p>
-          <h2 className="text-2xl font-semibold text-slate-50 sm:text-3xl">{selectedTrack?.title}</h2>
-          <p className="text-sm text-slate-300">{selectedTrack?.artist}</p>
-          {selectedTrack?.description ? (
-            <p className="text-sm text-slate-300/80">{selectedTrack.description}</p>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleTogglePlayback}
-            disabled={audioState === 'loading' || !audioSupported}
-            className="inline-flex items-center justify-center rounded-full border border-accent-cyan/60 bg-accent-cyan/15 px-4 py-2 text-sm font-semibold text-accent-cyan shadow-glow transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base hover:bg-accent-cyan/25 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {audioSupported
-              ? audioState === 'playing'
-                ? 'Pause audio'
-                : 'Play audio'
-              : 'Audio unavailable'}
-          </button>
-          <button
-            type="button"
-            onClick={handleRestartTrack}
-            className="inline-flex items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base hover:bg-surface-overlay"
-          >
-            Restart track
-          </button>
-        </div>
-      </div>
-      <div className="space-y-3">
-        <div className="relative h-2 overflow-hidden rounded-full bg-surface-overlay/70">
-          <div
-            data-testid="audio-progress-fill"
-            className="absolute inset-y-0 left-0 bg-accent-cyan/80 transition-all"
-            style={{
-              width: `${Math.round(clamp01(audioProgress.progress) * 100)}%`,
-              transition: prefersReducedMotion ? 'none' : undefined,
-            }}
-          />
-        </div>
-        <div className="flex items-center justify-between text-xs text-slate-300 sm:text-sm">
-          <span className="font-mono text-slate-200">{formatTime(audioProgress.time)}</span>
-          <span>{playbackStatus}</span>
-          <span className="font-mono text-slate-200">{formatTime(audioProgress.duration)}</span>
-        </div>
-      </div>
-    </div>
-  )
-
-  const renderTrackChips = () => (
-    <div className="flex flex-wrap gap-2">
-      {uploadedTracks.map((track) => {
-        const isSelected = track.id === selectedTrackId
-        return (
-          <button
-            key={`uploaded-${track.id}`}
-            type="button"
-            onClick={() => handleSelectTrack(track.id)}
-            className={classNames(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
-              isSelected
-                ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/60 shadow-glow'
-                : 'bg-surface-overlay/70 text-slate-300 hover:bg-surface-overlay/90',
-            )}
-          >
-            <span className="font-medium">{track.title}</span>
-            <span className="text-xs text-emerald-200/80">Локальный</span>
-            <span className="text-xs text-slate-400">{formatTime(track.duration)}</span>
-          </button>
-        )
-      })}
-      {TRACK_MANIFEST.map((track) => {
-        const isSelected = track.id === selectedTrackId
-        return (
-          <button
-            key={track.id}
-            type="button"
-            onClick={() => handleSelectTrack(track.id)}
-            className={classNames(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
-              isSelected
-                ? 'bg-accent-cyan/20 text-accent-cyan ring-1 ring-accent-cyan/60 shadow-glow'
-                : 'bg-surface-overlay/70 text-slate-300 hover:bg-surface-overlay/90',
-            )}
-          >
-            <span className="font-medium">{track.title}</span>
-            <span className="text-xs text-slate-400">{formatTime(track.duration)}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
-
-  const renderTrackUploadSection = () => (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <TrackUpload
-        onFileAccepted={handleUploadFile}
-        disabled={!audioSupported}
-        processing={isProcessingUpload}
-        error={uploadError}
-        onClearError={() => setUploadError(null)}
-      />
-      {recentTracks.length > 0 ? (
-        <div className="rounded-2xl border border-border-subtle bg-surface-raised/80 p-4 text-sm shadow-panel">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Последние треки</p>
-            <span className="text-[0.65rem] text-slate-400">
-              Запоминаем до {MAX_RECENT_TRACKS} последних загрузок за сессию
-            </span>
-          </div>
-          <div className="mt-3 space-y-2">
-            {recentTracks.map((entry) => {
-              const available = audioRef.current?.hasCustomTrack(entry.id) ?? false
-              return (
-                <button
-                  key={`recent-${entry.id}`}
-                  type="button"
-                  onClick={() => handleSelectRecentTrack(entry)}
-                  className="flex w-full items-center justify-between rounded-xl border border-border-subtle bg-surface-overlay/70 px-3 py-2 text-left transition hover:bg-surface-overlay/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
-                >
-                  <span className="flex flex-col text-xs">
-                    <span className="font-semibold text-slate-100">{entry.title}</span>
-                    <span className="text-slate-300">{formatTime(entry.duration)} · ~{Math.round(entry.bpm)} BPM</span>
-                  </span>
-                  <span
-                    className={classNames(
-                      'text-[0.65rem] font-medium',
-                      available ? 'text-emerald-300' : 'text-amber-300',
-                    )}
-                  >
-                    {available ? 'Доступно' : 'Нет в памяти'}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-
-  const renderTrackControls = (includeSummary: boolean) => (
-    <div className="space-y-6">
-      {includeSummary ? renderTrackSummary() : null}
-      {renderTrackChips()}
-      {renderTrackUploadSection()}
-    </div>
-  )
-
-  const renderScoreboardCard = (className?: string) => (
-    <div
-      className={classNames(
-        'w-full space-y-1 rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel ring-1 ring-white/10 backdrop-blur',
-        className,
-      )}
-    >
-      <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Seed</p>
-      <p className="font-mono text-lg font-semibold text-accent-cyan">{hud.seed}</p>
-      <div className="grid grid-cols-3 gap-3 pt-2 text-sm text-slate-200 sm:text-base">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Score</p>
-          <p className="font-mono text-2xl font-semibold text-slate-50 tabular-nums">{padScore(hud.score)}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Combo</p>
-          <p className="font-mono text-2xl font-semibold text-slate-50">x{hud.combo}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Best</p>
-          <p className="font-mono text-2xl font-semibold text-slate-50">x{hud.bestCombo}</p>
-        </div>
-      </div>
-    </div>
-  )
-
-  const renderLeadersCard = (className?: string) => (
-    <LeadersBoard
-      sessionBest={hud.sessionBestScore}
-      personalBest={hud.personalBestScore}
-      className={className}
-    />
-  )
-
-  const renderRecorderCard = (className?: string) => (
-    <div
-      className={classNames(
-        'w-full space-y-3 rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel ring-1 ring-white/10 backdrop-blur',
-        className,
-      )}
-    >
-      <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Recorder</p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={handleToggleRecording}
-          disabled={!recordingSupported}
-          className={classNames(
-            'inline-flex flex-1 items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base disabled:cursor-not-allowed disabled:opacity-60',
-            recordingState === 'recording'
-              ? 'border border-rose-400/60 bg-rose-500/20 text-rose-100 shadow-lg shadow-rose-500/20 hover:bg-rose-500/30'
-              : 'border border-accent-cyan/60 bg-accent-cyan/15 text-accent-cyan shadow-glow hover:bg-accent-cyan/25',
-          )}
-        >
-          {recordButtonLabel}
-        </button>
-        <button
-          type="button"
-          onClick={handleSaveClip}
-          disabled={saveDisabled}
-          className="inline-flex flex-1 items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition hover:bg-surface-overlay disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
-        >
-          {isSavingClip ? 'Saving…' : 'Save clip'}
-        </button>
-      </div>
-      <div className="space-y-1">
-        <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-overlay/70">
-          <div
-            data-testid="recorder-progress-fill"
-            className="absolute inset-y-0 left-0 bg-accent-cyan/80 transition-all"
-            style={{
-              width: `${Math.round(bufferRatio * 100)}%`,
-              transition: prefersReducedMotion ? 'none' : undefined,
-            }}
-          />
-        </div>
-        <div className="flex items-center justify-between text-[0.7rem] text-slate-300">
-          <span>{bufferedLabel}s buffered</span>
-          <span>{bufferLimitLabel}s max</span>
-        </div>
-      </div>
-      <div className="space-y-1 text-[0.7rem]">
-        <p className="text-slate-300">{recordingStatus}</p>
-        {recordingError ? <p className="text-rose-300">{recordingError}</p> : null}
-      </div>
-    </div>
-  )
-
-  const renderRunActions = (className?: string, orientation: 'column' | 'row' = 'column') => (
-    <div
-      className={classNames(
-        orientation === 'row' ? 'flex flex-row flex-wrap gap-2' : 'flex flex-col gap-2 sm:flex-row',
-        className,
-      )}
-    >
-      <button
-        type="button"
-        onClick={handlePauseRun}
-        disabled={hud.status !== 'running'}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
-      >
-        Pause run
-      </button>
-      <button
-        type="button"
-        onClick={handleRestart}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-accent-cyan/60 bg-accent-cyan/15 px-4 py-2 text-sm font-semibold text-accent-cyan shadow-glow transition hover:bg-accent-cyan/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
-      >
-        Restart run
-      </button>
-      <button
-        type="button"
-        onClick={handleNewSeed}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition hover:bg-surface-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
-      >
-        New seed
-      </button>
-    </div>
-  )
-
-  const heroHeader = (
-    <header className="flex flex-col gap-3 text-pretty text-center md:text-left">
-      <p className="text-xs font-semibold uppercase tracking-[0.4em] text-accent-cyan/80">the path · reactive beat runner</p>
-      <h1 className="text-balance text-4xl font-semibold tracking-tight text-slate-50 sm:text-5xl">
-        Calibrate the route through rhythm-synced obstacles
-      </h1>
-      <p className="text-base text-slate-300 sm:text-lg">
-        Deterministic seeds drive the procedural stage. Time steps run on a fixed delta while input events feed a coyote-time
-        enabled jump system. Restart to replay the same beatmap or roll a new seed.
-      </p>
-    </header>
-  )
-
-  const canvasSection = (
-    <section
-      className="relative w-full overflow-hidden rounded-3xl border border-border-strong bg-surface-raised/80 shadow-panel ring-1 ring-white/10 backdrop-blur"
-    >
-      <canvas
-        ref={canvasRef}
-        className="block w-full cursor-crosshair bg-transparent"
-        role="presentation"
-        style={{
-          ...canvasAspectStyle,
-          touchAction: 'none',
-        }}
-      />
-      <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
-        {showHudPanels ? (
-          <>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              {renderScoreboardCard('pointer-events-auto w-full max-w-sm lg:max-w-md')}
-              {renderLeadersCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-              {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
-              {renderRunActions('pointer-events-auto')}
-            </div>
-            <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-surface-overlay/70 px-4 py-3 text-xs text-slate-200 ring-1 ring-white/10 sm:justify-between sm:text-sm">
-              <StatusMarquee
-                message={statusMessage}
-                prefersReducedMotion={prefersReducedMotion}
-                className="w-full rounded-xl border border-border-subtle bg-surface-raised/80 px-3 py-2 text-left text-xs text-slate-100 sm:flex-1"
-                innerClassName="gap-12"
-              />
-              <p className="font-mono text-[0.8rem] text-slate-300 sm:text-xs">
-                Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
-              </p>
-            </div>
-          </>
-        ) : null}
-      </div>
-      <CanvasDiagnosticsOverlay
-        metrics={canvasMetrics}
-        profile={deviceProfile}
-        fps={performanceSample.fps}
-        frameTime={performanceSample.frameTime}
-        className="absolute bottom-3 left-3"
-        hidden={!worldReady}
-      />
-      {showStartOverlay ? (
-        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-surface-overlay/90 px-6 py-8 text-center backdrop-blur-sm">
-          <button
-            type="button"
-            onClick={handleStartRun}
-            data-testid="start-overlay"
-            className="flex w-full max-w-md flex-col items-center gap-3 rounded-3xl border border-accent-cyan/60 bg-surface-raised/90 px-6 py-8 text-center text-slate-100 shadow-panel transition hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface-base"
-          >
-            <span className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">{isPaused ? 'Paused' : 'Ready'}</span>
-            <span className="text-2xl font-semibold text-slate-50 sm:text-3xl">{startOverlayPrimary}</span>
-            <span className="text-sm text-slate-200 sm:text-base">{startOverlaySecondary}</span>
-            <span className="text-xs text-slate-400">{startOverlayHint}</span>
-          </button>
-        </div>
-      ) : null}
-    </section>
-  )
-
-  const footerContent = (
-    <footer className="grid gap-6 text-sm text-slate-400 sm:grid-cols-3">
-      <div>
-        <p className="font-medium text-slate-200">Deterministic seeds</p>
-        <p className="text-pretty">
-          Mulberry32 PRNG keeps obstacle patterns reproducible for each seed, enabling confident iteration on narrative beats.
-        </p>
-      </div>
-      <div>
-        <p className="font-medium text-slate-200">Fixed-step physics</p>
-        <p className="text-pretty">
-          The engine steps the world on a locked delta, combining coyote time, jump buffering, and AABB collisions for responsive
-          movement.
-        </p>
-      </div>
-      <div>
-        <p className="font-medium text-slate-200">Canvas-first rendering</p>
-        <p className="text-pretty">
-          Layered gradients, beat flashes, and HUD overlays highlight the player&apos;s momentum without sacrificing clarity.
-        </p>
-      </div>
-    </footer>
-  )
-
-  const telemetryChips = (
-    <div className="telemetry-scroll flex gap-3 overflow-x-auto pb-2 text-sm sm:grid sm:grid-cols-2 sm:gap-4 sm:overflow-visible md:grid-cols-3">
-      {telemetryItems.map((item) => (
-        <div
-          key={item.key}
-          className="min-w-[160px] rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel sm:min-w-0"
-        >
-          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">{item.label}</p>
-          <p className="font-mono text-lg font-semibold text-slate-50">{item.value}</p>
-          <p className="text-xs text-slate-300">{item.description}</p>
-        </div>
-      ))}
-    </div>
-  )
+  const lastTrack = useMemo(() => (lastTrackId ? resolveTrackById(lastTrackId) ?? null : null), [lastTrackId, resolveTrackById])
 
   return (
-    <div className="min-h-screen bg-surface-base text-slate-100">
-      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
-        {isTabletOrLarger ? (
-          <div className="grid gap-10 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-            <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
-              {renderTrackControls(true)}
-            </section>
-            <div className="flex flex-col gap-10">
-              {heroHeader}
-              {canvasSection}
-              {footerContent}
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-8">
-            <div className="space-y-4">
-              {canvasSection}
-              <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-4 shadow-panel ring-1 ring-white/10 backdrop-blur">
-                {renderRunActions('w-full', 'row')}
-              </section>
-            </div>
-            <div className="space-y-6">
-              {heroHeader}
-              <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
-                {renderTrackSummary()}
-              </section>
-              <StatusMarquee
-                message={statusMessage}
-                prefersReducedMotion={prefersReducedMotion}
-                className="rounded-full border border-accent-cyan/50 bg-accent-cyan/15 px-4 py-2 text-xs text-accent-cyan shadow-glow"
-              />
-              {telemetryChips}
-            </div>
-            {footerContent}
-          </div>
-        )}
-      </main>
-      {!isTabletOrLarger ? (
-        <>
-          <button
-            type="button"
-            aria-label="Open controls"
-            aria-expanded={isSheetOpen}
-            aria-controls="mobile-controls"
-            onClick={() => setSheetOpen(true)}
-            className={classNames(
-              'fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent-cyan text-slate-950 shadow-glow transition hover:bg-accent-cyan/90 md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
-              isSheetOpen && 'translate-y-12 opacity-0 pointer-events-none',
-            )}
-            style={{
-              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
-              right: 'calc(env(safe-area-inset-right, 0px) + 1.5rem)',
-            }}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M4 7h16" />
-              <path d="M4 12h12" />
-              <path d="M4 17h8" />
-              <circle cx="16" cy="7" r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="20" cy="12" r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="12" cy="17" r="1.5" fill="currentColor" stroke="none" />
-            </svg>
-            <span className="sr-only">Open controls</span>
-          </button>
-          <BottomSheet
-            open={isSheetOpen}
-            onOpenChange={setSheetOpen}
-            prefersReducedMotion={prefersReducedMotion}
-            title="Control surface"
-            id="mobile-controls"
-          >
-            <div className="space-y-6">
-              {renderScoreboardCard()}
-              {renderLeadersCard()}
-              {renderRecorderCard()}
-              {renderRunActions()}
-              <StatusMarquee
-                message={statusMessage}
-                prefersReducedMotion={prefersReducedMotion}
-                className="rounded-2xl border border-border-subtle bg-surface-raised/90 px-4 py-2 text-xs text-slate-100"
-                innerClassName="gap-12"
-              />
-              <p className="text-xs text-slate-300">
-                Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
-              </p>
-              {renderTrackControls(false)}
-            </div>
-          </BottomSheet>
-        </>
+    <div className="min-h-screen bg-[#0B0F14] text-slate-100">
+      {screen === 'home' ? (
+        <HomeScreen
+          onStart={handleStartGame}
+          onOpenSongSelect={() => setScreen('song-select')}
+          onOpenSettings={() => setScreen('settings')}
+          lastTrack={lastTrack}
+        />
+      ) : null}
+
+      {screen === 'song-select' ? (
+        <SongSelectScreen
+          builtInTracks={TRACK_MANIFEST}
+          uploadedTracks={uploadedTracks}
+          selectedTrackId={selectedTrackId}
+          onSelectTrack={setSelectedTrackId}
+          onBack={() => setScreen('home')}
+          onStart={handleStartGame}
+          onUpload={handleUploadFile}
+          uploadError={uploadError}
+          onClearUploadError={() => setUploadError(null)}
+          isProcessingUpload={isProcessingUpload}
+          audioSupported={audioSupported}
+          recentTracks={recentTracks}
+          onSelectRecentTrack={handleSelectRecentTrack}
+        />
+      ) : null}
+
+      {screen === 'settings' ? (
+        <SettingsScreen
+          dprCap={dprCap}
+          onChangeDpr={handleChangeDpr}
+          reducedMotion={reducedMotionEnabled}
+          onChangeReducedMotion={handleToggleReducedMotion}
+          onBack={() => setScreen('home')}
+        />
+      ) : null}
+
+      {screen === 'game' && selectedTrack ? (
+        <GameScreen track={selectedTrack} audio={audio} dprCap={dprCap} onComplete={handleShowResults} onExit={handleExitGame} />
+      ) : null}
+
+      {screen === 'results' && gameResult ? (
+        <ResultsScreen
+          track={gameResult.track}
+          snapshot={gameResult.snapshot}
+          onRetry={handleStartGame}
+          onHome={() => setScreen('home')}
+          onSongSelect={() => setScreen('song-select')}
+        />
       ) : null}
     </div>
   )
