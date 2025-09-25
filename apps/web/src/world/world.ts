@@ -1,23 +1,67 @@
-import type { Vector2 } from '@the-path/types'
 import { createPrng, type Prng } from '../core/prng'
+import type { InputFrame, SwipeDirection } from '../engine/input'
 import {
-  FLASH_LIFETIME,
-  FLASH_LONG_LIFETIME,
-  GROUND_HEIGHT_RATIO,
-  MIN_GROUND_HEIGHT,
-  PLAYER_X,
+  BASE_SCROLL_SPEED,
+  FEEDBACK_LIFETIME,
+  GOOD_SCORE,
+  GOOD_WINDOW,
+  HITBAR_HEIGHT_RATIO,
+  INITIAL_BEAT_OFFSET,
+  LANE_COUNT,
+  LANE_SWITCH_MAX_DURATION,
+  LANE_SWITCH_MIN_DURATION,
+  NOTE_PRELOAD_TIME,
+  PERFECT_SCORE,
+  PERFECT_WINDOW,
 } from './constants'
-import { BeatLevelGenerator, type BeatLevelGeneratorOptions } from './beatLevelGenerator'
-import { advanceObstacles, evaluateObstacles } from './obstacles'
-import { createInitialPlayer, updatePlayer } from './player'
-import type { FlashEffect, StageMetrics, WorldSnapshot, WorldState } from './types'
+import { BeatLevelGenerator } from './beatLevelGenerator'
+import {
+  type Judgement,
+  type LaneIndex,
+  type LaneNote,
+  type RunnerState,
+  type StageMetrics,
+  type WorldSnapshot,
+  type WorldState,
+  type WorldStatus,
+} from './types'
 import { readPersonalBest, updatePersonalBest, type PersonalBestRecord } from './personalBest'
 
-const createStageMetrics = (width: number, height: number): StageMetrics => {
-  const groundHeight = Math.max(height * GROUND_HEIGHT_RATIO, MIN_GROUND_HEIGHT)
-  const groundY = height - groundHeight
-  return { width, height, groundHeight, groundY }
+const clampLane = (lane: number): LaneIndex => {
+  if (lane < 0) return 0
+  if (lane >= LANE_COUNT) return (LANE_COUNT - 1) as LaneIndex
+  return lane as LaneIndex
 }
+
+const createStageMetrics = (width: number, height: number): StageMetrics => {
+  const lanePadding = Math.max(12, Math.min(width * 0.04, 32))
+  const availableWidth = Math.max(0, width - lanePadding * 2)
+  const laneWidth = availableWidth / LANE_COUNT
+  const hitLineY = height * (1 - HITBAR_HEIGHT_RATIO * 0.5)
+  return {
+    width,
+    height,
+    hitLineY,
+    laneWidth,
+    lanePadding,
+    laneCount: LANE_COUNT,
+    scrollSpeed: BASE_SCROLL_SPEED,
+  }
+}
+
+const createRunnerState = (): RunnerState => ({
+  lane: 1,
+  targetLane: 1,
+  transitionFrom: 1,
+  transitionStart: 0,
+  transitionDuration: 0,
+  combo: 0,
+  bestCombo: 0,
+  score: 0,
+  perfectHits: 0,
+  goodHits: 0,
+  missHits: 0,
+})
 
 const createBaseState = (seed: string, stage: StageMetrics): WorldState => ({
   seed,
@@ -25,15 +69,12 @@ const createBaseState = (seed: string, stage: StageMetrics): WorldState => ({
   beat: 0,
   status: 'menu',
   stage,
-  player: createInitialPlayer(stage),
-  obstacles: [],
-  flashes: [],
-  score: 0,
-  combo: 0,
-  bestCombo: 0,
+  lanes: { count: LANE_COUNT },
+  notes: [],
+  runner: createRunnerState(),
+  feedback: [],
+  accuracy: 1,
 })
-
-const cloneVector = (vector: Vector2): Vector2 => ({ x: vector.x, y: vector.y })
 
 export interface WorldConfig {
   seed: string
@@ -42,25 +83,18 @@ export interface WorldConfig {
 }
 
 export interface WorldUpdateInput {
-  jump?: boolean
-  start?: boolean
-  pause?: boolean
-  restart?: boolean
-  jumpHoldDuration: number
-  pointer?: Vector2
+  frame?: InputFrame
   dt: number
-  onRunRestart?: (event: { reason: 'manual' | 'gameover'; seed: string }) => void
 }
 
 export class World {
   public state: WorldState
 
-  private baseSeed: string
-  private prng: Prng
-  private generator: BeatLevelGenerator
-  private generatorOptions: BeatLevelGeneratorOptions
+  private readonly baseSeed: string
+  private readonly prng: Prng
+  private readonly generator: BeatLevelGenerator
   private externalClock?: () => number | null
-  private flashId = 0
+  private feedbackId = 0
   private sessionBestScore = 0
   private personalBest: PersonalBestRecord
   private pendingReset = false
@@ -69,14 +103,11 @@ export class World {
     this.baseSeed = config.seed
     const stage = createStageMetrics(config.width, config.height)
     this.prng = createPrng(this.baseSeed)
-    this.generatorOptions = {}
-    this.generator = new BeatLevelGenerator(this.prng, this.generatorOptions)
+    this.generator = new BeatLevelGenerator(this.prng, {
+      initialOffset: INITIAL_BEAT_OFFSET,
+    })
     this.state = createBaseState(this.baseSeed, stage)
     this.personalBest = readPersonalBest()
-  }
-
-  setPointer(pointer?: Vector2): void {
-    this.state.pointer = pointer ? cloneVector(pointer) : undefined
   }
 
   attachTimeSource(clock?: () => number | null): void {
@@ -98,203 +129,214 @@ export class World {
   setViewport(width: number, height: number): void {
     const stage = createStageMetrics(width, height)
     this.state.stage = stage
-    const player = this.state.player
-    const maxX = stage.width - player.width * 1.5
-    const minX = player.width * 0.5
-    player.position.x = Math.min(Math.max(minX, PLAYER_X), Math.max(minX, maxX))
-    const groundY = stage.groundY - player.height
-    if (player.position.y > groundY) {
-      player.position.y = groundY
-      player.velocity.y = 0
-      player.onGround = true
-    }
-    this.state.obstacles = this.state.obstacles.map((obstacle) => ({
-      ...obstacle,
-      position: { x: obstacle.position.x, y: stage.groundY - obstacle.height },
-    }))
+  }
+
+  reset(seed: string = this.baseSeed): void {
+    this.generator.reset()
+    this.state = createBaseState(seed, this.state.stage)
+    this.state.seed = seed
   }
 
   snapshot(): WorldSnapshot {
+    const hits = this.state.runner.perfectHits + this.state.runner.goodHits
+    const misses = this.state.runner.missHits
     return {
-      score: Math.floor(this.state.score),
-      combo: this.state.combo,
-      bestCombo: this.state.bestCombo,
+      score: Math.floor(this.state.runner.score),
+      combo: this.state.runner.combo,
+      bestCombo: this.state.runner.bestCombo,
       status: this.state.status,
       seed: this.state.seed,
-      sessionBestScore: this.sessionBestScore,
-      personalBestScore: this.personalBest.score,
+      accuracy: hits + misses === 0 ? 1 : hits / (hits + misses),
+      hits,
+      misses,
     }
+  }
+
+  private getCurrentTime(fallbackDt: number): number {
+    const externalTime = this.externalClock?.()
+    if (typeof externalTime === 'number' && Number.isFinite(externalTime) && externalTime >= 0) {
+      return externalTime
+    }
+    return this.state.time + fallbackDt
+  }
+
+  private updateFeedback(dt: number): void {
+    const now = this.state.time
+    this.state.feedback = this.state.feedback.filter((entry) => now - entry.createdAt < FEEDBACK_LIFETIME - dt * 0.25)
+  }
+
+  private addFeedback(judgement: Judgement, lane: LaneIndex): void {
+    const { stage } = this.state
+    const laneCenter = stage.lanePadding + stage.laneWidth * (lane + 0.5)
+    this.state.feedback.push({
+      id: (this.feedbackId += 1),
+      judgement,
+      createdAt: this.state.time,
+      x: laneCenter,
+      y: stage.hitLineY,
+    })
+  }
+
+  private updateAccuracy(): void {
+    const hits = this.state.runner.perfectHits + this.state.runner.goodHits
+    const total = hits + this.state.runner.missHits
+    this.state.accuracy = total === 0 ? 1 : Math.max(0, Math.min(1, hits / total))
+  }
+
+  private markJudgement(note: LaneNote, judgement: Judgement, hitTime: number): void {
+    note.judged = true
+    note.judgement = judgement
+    note.hitTime = hitTime
+
+    const runner = this.state.runner
+    if (judgement === 'miss') {
+      runner.combo = 0
+      runner.missHits += 1
+      this.addFeedback(judgement, note.lane)
+      this.updateAccuracy()
+      return
+    }
+
+    const isPerfect = judgement === 'perfect'
+    if (isPerfect) {
+      runner.perfectHits += 1
+      runner.score += PERFECT_SCORE
+    } else {
+      runner.goodHits += 1
+      runner.score += GOOD_SCORE
+    }
+
+    runner.combo += 1
+    runner.bestCombo = Math.max(runner.bestCombo, runner.combo)
+    this.addFeedback(judgement, note.lane)
+    this.updateAccuracy()
+  }
+
+  private judgeLane(lane: LaneIndex, currentTime: number): Judgement | null {
+    const activeLane = this.state.runner.targetLane
+    if (lane !== activeLane) {
+      return null
+    }
+    const upcoming = this.state.notes.find((note) => !note.judged && note.lane === lane)
+    if (!upcoming) {
+      return null
+    }
+
+    const delta = currentTime - upcoming.time
+    if (delta < -GOOD_WINDOW) {
+      // Too early
+      return null
+    }
+
+    if (Math.abs(delta) <= PERFECT_WINDOW) {
+      this.markJudgement(upcoming, 'perfect', currentTime)
+      return 'perfect'
+    }
+
+    if (Math.abs(delta) <= GOOD_WINDOW) {
+      this.markJudgement(upcoming, 'good', currentTime)
+      return 'good'
+    }
+
+    this.markJudgement(upcoming, 'miss', currentTime)
+    return 'miss'
+  }
+
+  private switchLane(direction: SwipeDirection | null): void {
+    if (!direction) return
+    let target = this.state.runner.targetLane
+    if (direction === 'left') {
+      target -= 1
+    } else if (direction === 'right') {
+      target += 1
+    } else {
+      return
+    }
+
+    target = clampLane(target)
+    const runner = this.state.runner
+    if (target === runner.targetLane) {
+      return
+    }
+
+    const duration = this.prng.nextRange(LANE_SWITCH_MIN_DURATION, LANE_SWITCH_MAX_DURATION)
+    runner.transitionFrom = runner.lane
+    runner.targetLane = target
+    runner.transitionStart = this.state.time
+    runner.transitionDuration = duration
+  }
+
+  private updateLaneTransition(): void {
+    const runner = this.state.runner
+    if (runner.lane === runner.targetLane) return
+    const elapsed = this.state.time - runner.transitionStart
+    if (elapsed >= runner.transitionDuration) {
+      runner.lane = runner.targetLane
+      runner.transitionDuration = 0
+      return
+    }
+  }
+
+  private updateNotes(currentTime: number): void {
+    for (const note of this.state.notes) {
+      if (!note.judged && currentTime - note.time > GOOD_WINDOW) {
+        this.markJudgement(note, 'miss', note.time)
+      }
+    }
+
+    const pruneBefore = currentTime - NOTE_PRELOAD_TIME * 1.2
+    this.state.notes = this.state.notes.filter((note) => note.time >= pruneBefore)
   }
 
   update(input: WorldUpdateInput): void {
-    this.setPointer(input.pointer)
-    this.advanceFlashes(input.dt)
+    const currentStatus: WorldStatus = this.state.status
 
-    const startRequested = input.start ?? true
-    const jumpRequested = input.jump ?? false
-    const pauseRequested = input.pause ?? false
-    const restartRequested = input.restart ?? false
-
-    if (restartRequested) {
-      input.onRunRestart?.({ reason: 'manual', seed: this.baseSeed })
-      this.reset(this.baseSeed)
-      this.pendingReset = true
-      this.state.status = 'running'
-      return
-    }
-
-    const currentStatus = this.state.status
-
-    if (currentStatus === 'gameover') {
-      if (jumpRequested || startRequested || restartRequested) {
-        input.onRunRestart?.({ reason: 'gameover', seed: this.baseSeed })
-        this.reset(this.baseSeed)
-        this.pendingReset = true
-        this.state.status = 'running'
+    if (currentStatus !== 'running') {
+      if (currentStatus === 'gameover' && this.pendingReset) {
+        this.pendingReset = false
+        this.state.status = 'menu'
       }
       return
     }
 
-    if (currentStatus === 'menu') {
-      if (startRequested || jumpRequested) {
-        this.state.status = 'running'
-      }
-    } else if (currentStatus === 'paused') {
-      if (startRequested || jumpRequested) {
-        this.state.status = 'running'
-      } else {
-        return
-      }
+    const nextTime = this.getCurrentTime(input.dt)
+    const dt = Math.max(0, nextTime - this.state.time)
+    this.state.time += dt
+
+    const frame: InputFrame = input.frame ?? { tapLane: null, swipe: null }
+    this.switchLane(frame.swipe)
+
+    this.generator.update(this.state, NOTE_PRELOAD_TIME)
+    this.updateNotes(this.state.time)
+
+    if (frame.tapLane !== null) {
+      this.judgeLane(clampLane(frame.tapLane), this.state.time)
     }
 
-    if (pauseRequested && this.state.status === 'running') {
-      this.state.status = 'paused'
-      return
-    }
+    this.updateLaneTransition()
+    this.updateFeedback(dt)
 
-    const externalTime = this.externalClock?.()
-    if (typeof externalTime === 'number' && Number.isFinite(externalTime)) {
-      if (externalTime >= 0) {
-        this.state.time = externalTime
-      }
-    } else {
-      this.state.time += input.dt
-    }
+    this.state.beat = this.generator.getBeatIndex()
 
-    const playerResult = updatePlayer(this.state.player, {
-      jumpRequested,
-      jumpHoldDuration: input.jumpHoldDuration,
-      stage: this.state.stage,
-      dt: input.dt,
-    })
-
-    if (playerResult.jumped) {
-      this.addFlash({
-        position: {
-          x: this.state.player.position.x + this.state.player.width * 0.5,
-          y: this.state.player.position.y + this.state.player.height * 0.5,
-        },
-        radius: this.state.player.width * 1.5,
-        strength: 0.7,
-        life: FLASH_LIFETIME,
-      })
-    }
-
-    this.generator.update(this.state)
-
-    this.state.obstacles = advanceObstacles(
-      this.state.obstacles,
-      input.dt,
-      this.state.stage.width
-    )
-
-    const obstacleResult = evaluateObstacles(this.state, this.state.player)
-
-    if (obstacleResult.scored > 0) {
-      this.state.score += obstacleResult.scored
-    }
-
-    if (obstacleResult.comboIncreased) {
-      this.state.combo += 1
-      this.state.bestCombo = Math.max(this.state.bestCombo, this.state.combo)
-    }
-
-    for (const flash of obstacleResult.newFlashes) {
-      this.addFlash({
-        position: flash.position,
-        radius: flash.radius,
-        life: flash.life,
-        strength: flash.strength,
-      })
-    }
-
-    if (obstacleResult.crashed) {
-      this.state.status = 'gameover'
-      this.state.player.alive = false
-      this.state.combo = 0
-      this.addFlash({
-        position: {
-          x: this.state.player.position.x + this.state.player.width * 0.5,
-          y: this.state.player.position.y + this.state.player.height * 0.5,
-        },
-        radius: this.state.player.width * 3,
-        life: FLASH_LONG_LIFETIME,
-        strength: 1,
-      })
-      this.finalizeRun()
-    }
-  }
-
-  reset(seed?: string, generatorOptions?: BeatLevelGeneratorOptions): void {
-    if (seed) {
-      this.baseSeed = seed
-    }
-    const stage = this.state.stage
-    const pointer = this.state.pointer
-    this.prng = createPrng(this.baseSeed)
-    if (generatorOptions) {
-      this.generatorOptions = { ...this.generatorOptions, ...generatorOptions }
-    }
-    this.generator = new BeatLevelGenerator(this.prng, this.generatorOptions)
-    this.generator.reset()
-    this.flashId = 0
-    this.state = createBaseState(this.baseSeed, stage)
-    if (pointer) {
-      this.state.pointer = { ...pointer }
-    }
-  }
-
-  consumePendingReset(): boolean {
-    const pending = this.pendingReset
-    this.pendingReset = false
-    return pending
-  }
-
-  private addFlash(flash: Omit<FlashEffect, 'id' | 'age'>): void {
-    this.state.flashes.push({
-      id: (this.flashId += 1),
-      age: 0,
-      ...flash,
-    })
-  }
-
-  private advanceFlashes(dt: number): void {
-    this.state.flashes = this.state.flashes
-      .map((flash) => ({ ...flash, age: flash.age + dt }))
-      .filter((flash) => flash.age < flash.life)
-  }
-
-  private updateSessionBest(score: number): void {
-    if (Number.isFinite(score) && score > this.sessionBestScore) {
+    const score = Math.floor(this.state.runner.score)
+    if (score > this.sessionBestScore) {
       this.sessionBestScore = score
     }
+    if (score > this.personalBest.score) {
+      this.personalBest = updatePersonalBest(score)
+    }
   }
 
-  private finalizeRun(): void {
-    const finalScore = Math.max(0, Math.floor(this.state.score))
-    this.updateSessionBest(finalScore)
-    if (finalScore > this.personalBest.score) {
-      this.personalBest = updatePersonalBest(finalScore)
-    }
+  completeRun(): void {
+    this.state.status = 'gameover'
+    this.pendingReset = true
+  }
+
+  getSessionBest(): number {
+    return this.sessionBestScore
+  }
+
+  getPersonalBest(): number {
+    return this.personalBest.score
   }
 }

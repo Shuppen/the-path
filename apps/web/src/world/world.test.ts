@@ -1,225 +1,93 @@
+import { describe, expect, it } from 'vitest'
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-const { advanceObstaclesMock, evaluateObstaclesMock } = vi.hoisted(() => ({
-  advanceObstaclesMock: vi.fn(),
-  evaluateObstaclesMock: vi.fn(),
-}))
-
-vi.mock('./obstacles', () => ({
-  advanceObstacles: advanceObstaclesMock,
-  evaluateObstacles: evaluateObstaclesMock,
-}))
-
-import { PERSONAL_BEST_STORAGE_KEY } from './personalBest'
-import type { ObstacleState } from './types'
+import { GOOD_WINDOW, LANE_SWITCH_MAX_DURATION, LANE_SWITCH_MIN_DURATION, PERFECT_WINDOW } from './constants'
+import type { LaneNote } from './types'
 import { World } from './world'
 
-const baseObstacleResult = () => ({
-  crashed: false,
-  scored: 0,
-  comboIncreased: false,
-  newFlashes: [],
-})
+const createWorld = () => {
+  noteCounter = 0
+  const world = new World({ seed: 'test-seed', width: 720, height: 1280 })
+  world.state.status = 'running'
+  world.state.time = 1
+  world.state.runner.lane = 1
+  world.state.runner.targetLane = 1
+  ;(world as unknown as { generator: { update: (state: unknown, lead: number) => void } }).generator.update = () => {}
+  return world
+}
 
-describe('World restart timeline control', () => {
-  beforeEach(() => {
-    advanceObstaclesMock.mockReset()
-    evaluateObstaclesMock.mockReset()
-    advanceObstaclesMock.mockImplementation((obstacles) => obstacles)
-    evaluateObstaclesMock.mockImplementation(baseObstacleResult)
+let noteCounter = 0
+
+const insertNote = (world: World, overrides: Partial<LaneNote> = {}): LaneNote => {
+  const note: LaneNote = {
+    id: (noteCounter += 1),
+    lane: overrides.lane ?? 1,
+    time: overrides.time ?? world.state.time,
+    judged: overrides.judged ?? false,
+    judgement: overrides.judgement,
+    hitTime: overrides.hitTime,
+  }
+  world.state.notes.push(note)
+  return note
+}
+
+describe('World note judgement', () => {
+  it('awards a perfect hit within the perfect timing window', () => {
+    const world = createWorld()
+    const note = insertNote(world)
+
+    world.update({ dt: 0, frame: { tapLane: note.lane, swipe: null } })
+
+    expect(note.judged).toBe(true)
+    expect(note.judgement).toBe('perfect')
+    expect(world.state.runner.perfectHits).toBe(1)
+    expect(world.state.runner.combo).toBe(1)
   })
 
-  it('requests a timeline reset when restarting after a late crash', () => {
-    let externalTime = 32.75
-    const world = new World({ seed: 'late-run', width: 800, height: 600 })
-    world.attachTimeSource(() => externalTime)
+  it('awards a good hit when slightly outside the perfect window', () => {
+    const world = createWorld()
+    const note = insertNote(world, { time: world.state.time - (PERFECT_WINDOW + 0.02) })
 
-    const obstacle: ObstacleState = {
-      id: 1,
-      kind: 'pulse',
-      position: { x: 180, y: 320 },
-      width: 48,
-      height: 64,
-      speedFactor: 1,
-      passed: false,
-      beatIndex: 96,
-    }
+    world.update({ dt: 0, frame: { tapLane: note.lane, swipe: null } })
 
-    world.state.status = 'gameover'
-    world.state.time = externalTime
-    world.state.player.alive = false
-    world.state.obstacles = [obstacle]
+    expect(note.judged).toBe(true)
+    expect(note.judgement).toBe('good')
+    expect(world.state.runner.goodHits).toBe(1)
+    expect(world.state.runner.combo).toBe(1)
+  })
 
-    const requestReset = vi.fn(() => {
-      externalTime = 0
-    })
+  it('registers a miss when tapping after the good window', () => {
+    const world = createWorld()
+    const note = insertNote(world, { time: world.state.time - (GOOD_WINDOW + 0.05) })
 
-    world.update({
-      dt: 0.016,
-      jump: true,
-      start: false,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-      onRunRestart: requestReset,
-    })
+    world.update({ dt: 0, frame: { tapLane: note.lane, swipe: null } })
 
-    expect(requestReset).toHaveBeenCalledTimes(1)
-    expect(requestReset).toHaveBeenCalledWith({ reason: 'gameover', seed: 'late-run' })
-    expect(world.state.status).toBe('running')
-    expect(world.state.obstacles.length).toBe(0)
-    world.update({
-      dt: 0.016,
-      jump: false,
-      start: false,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-    })
-
-    expect(externalTime).toBe(0)
-    expect(world.state.time).toBe(0)
-    expect(world.state.obstacles.length).toBe(0)
+    expect(note.judged).toBe(true)
+    expect(note.judgement).toBe('miss')
+    expect(world.state.runner.missHits).toBe(1)
+    expect(world.state.runner.combo).toBe(0)
   })
 })
 
-describe('World personal best tracking', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    advanceObstaclesMock.mockReset()
-    evaluateObstaclesMock.mockReset()
-    advanceObstaclesMock.mockImplementation((obstacles) => obstacles)
-    evaluateObstaclesMock.mockImplementation(baseObstacleResult)
+describe('World lane switching', () => {
+  it('moves the runner left and clamps to lane bounds', () => {
+    const world = createWorld()
+    world.state.runner.targetLane = 0
+    world.state.runner.lane = 0
+
+    world.update({ dt: 0, frame: { tapLane: null, swipe: 'left' } })
+
+    expect(world.state.runner.targetLane).toBe(0)
+    expect(world.state.runner.transitionDuration).toBe(0)
   })
 
-  it('persists the highest score across resets', () => {
-    evaluateObstaclesMock
-      .mockImplementationOnce(() => ({ ...baseObstacleResult(), scored: 250 }))
-      .mockImplementationOnce(() => ({ ...baseObstacleResult(), crashed: true }))
+  it('moves the runner right with an eased transition', () => {
+    const world = createWorld()
 
-    const world = new World({ seed: 'test', width: 800, height: 600 })
+    world.update({ dt: 0, frame: { tapLane: null, swipe: 'right' } })
 
-    expect(world.snapshot().status).toBe('menu')
-
-    world.update({
-      dt: 0.016,
-      jump: false,
-      start: true,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-    })
-    expect(world.snapshot().status).toBe('running')
-    world.update({
-      dt: 0.016,
-      jump: false,
-      start: false,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-    })
-
-    const snapshot = world.snapshot()
-    expect(snapshot.personalBestScore).toBe(250)
-    expect(snapshot.sessionBestScore).toBe(250)
-    expect(snapshot.status).toBe('gameover')
-
-    const stored = JSON.parse(localStorage.getItem(PERSONAL_BEST_STORAGE_KEY) ?? '{}') as {
-      score?: number
-      updatedAt?: number
-    }
-    expect(stored.score).toBe(250)
-    expect(typeof stored.updatedAt).toBe('number')
-
-    world.reset()
-    const afterReset = world.snapshot()
-    expect(afterReset.personalBestScore).toBe(250)
-    expect(afterReset.sessionBestScore).toBe(250)
-    expect(afterReset.status).toBe('menu')
-  })
-
-  it('loads a saved personal best when constructed', () => {
-    localStorage.setItem(
-      PERSONAL_BEST_STORAGE_KEY,
-      JSON.stringify({ score: 4200, updatedAt: 1690000000000 }),
-    )
-
-    const world = new World({ seed: 'another', width: 640, height: 360 })
-    const snapshot = world.snapshot()
-
-    expect(snapshot.personalBestScore).toBe(4200)
-    expect(snapshot.sessionBestScore).toBe(0)
-  })
-})
-
-describe('World auto restart behaviour', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    advanceObstaclesMock.mockReset()
-    evaluateObstaclesMock.mockReset()
-  })
-
-  it('clears obstacles when restarting after a late crash', () => {
-    advanceObstaclesMock.mockImplementation((obstacles) => obstacles)
-    let crashTriggered = false
-    const targetTime = 33
-    const dt = 1 / 60
-    const steps = Math.ceil(targetTime * 60)
-    let iterations = 0
-    evaluateObstaclesMock.mockImplementation((state) => {
-      iterations += 1
-      if (!crashTriggered && (state.time >= targetTime || iterations >= steps)) {
-        crashTriggered = true
-        return { ...baseObstacleResult(), crashed: true }
-      }
-      return baseObstacleResult()
-    })
-
-    const world = new World({ seed: 'long-run', width: 800, height: 600 })
-    let simulatedTime = 0
-    world.attachTimeSource(() => simulatedTime)
-
-    for (let i = 0; i < steps; i += 1) {
-      simulatedTime += dt
-      world.update({
-        dt,
-        jump: false,
-        start: i === 0,
-        pause: false,
-        restart: false,
-        jumpHoldDuration: 0,
-      })
-    }
-
-    expect(crashTriggered).toBe(true)
-    expect(world.state.status).toBe('gameover')
-    expect(world.state.obstacles.length).toBeGreaterThan(0)
-
-    world.update({
-      dt,
-      jump: true,
-      start: false,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-    })
-    const pendingReset = world.consumePendingReset()
-    expect(pendingReset).toBe(true)
-
-    simulatedTime = 0
-    simulatedTime += dt
-    world.update({
-      dt,
-      jump: false,
-      start: true,
-      pause: false,
-      restart: false,
-      jumpHoldDuration: 0,
-    })
-
-    expect(world.state.status).toBe('running')
-    expect(world.state.time).toBeCloseTo(simulatedTime, 3)
-    expect(world.state.obstacles.length).toBe(0)
+    expect(world.state.runner.targetLane).toBe(2)
+    expect(world.state.runner.transitionFrom).toBe(1)
+    expect(world.state.runner.transitionDuration).toBeGreaterThanOrEqual(LANE_SWITCH_MIN_DURATION)
+    expect(world.state.runner.transitionDuration).toBeLessThanOrEqual(LANE_SWITCH_MAX_DURATION)
   })
 })
