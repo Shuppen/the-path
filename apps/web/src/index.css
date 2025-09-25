@@ -31,8 +31,18 @@ canvas {
 .telemetry-scroll {
   -ms-overflow-style: none;
   scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
 }
 
 .telemetry-scroll::-webkit-scrollbar {
   display: none;
+}
+
+.telemetry-scroll > * {
+  scroll-snap-align: start;
+}
+
+.sheet-safe-area {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 2rem);
 }

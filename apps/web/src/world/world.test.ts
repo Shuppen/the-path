@@ -58,6 +58,8 @@ describe('World restart timeline control', () => {
     world.update({
       dt: 0.016,
       jump: true,
+      start: false,
+      pause: false,
       restart: false,
       jumpHoldDuration: 0,
       onRunRestart: requestReset,
@@ -67,8 +69,14 @@ describe('World restart timeline control', () => {
     expect(requestReset).toHaveBeenCalledWith({ reason: 'gameover', seed: 'late-run' })
     expect(world.state.status).toBe('running')
     expect(world.state.obstacles.length).toBe(0)
-
-    world.update({ dt: 0.016, jump: false, restart: false, jumpHoldDuration: 0 })
+    world.update({
+      dt: 0.016,
+      jump: false,
+      start: false,
+      pause: false,
+      restart: false,
+      jumpHoldDuration: 0,
+    })
 
     expect(externalTime).toBe(0)
     expect(world.state.time).toBe(0)
@@ -174,20 +182,41 @@ describe('World auto restart behaviour', () => {
 
     for (let i = 0; i < steps; i += 1) {
       simulatedTime += dt
-      world.update({ dt, jump: false, restart: false, jumpHoldDuration: 0 })
+      world.update({
+        dt,
+        jump: false,
+        start: i === 0,
+        pause: false,
+        restart: false,
+        jumpHoldDuration: 0,
+      })
     }
 
     expect(crashTriggered).toBe(true)
     expect(world.state.status).toBe('gameover')
     expect(world.state.obstacles.length).toBeGreaterThan(0)
 
-    world.update({ dt, jump: true, restart: false, jumpHoldDuration: 0 })
+    world.update({
+      dt,
+      jump: true,
+      start: false,
+      pause: false,
+      restart: false,
+      jumpHoldDuration: 0,
+    })
     const pendingReset = world.consumePendingReset()
     expect(pendingReset).toBe(true)
 
     simulatedTime = 0
     simulatedTime += dt
-    world.update({ dt, jump: false, restart: false, jumpHoldDuration: 0 })
+    world.update({
+      dt,
+      jump: false,
+      start: true,
+      pause: false,
+      restart: false,
+      jumpHoldDuration: 0,
+    })
 
     expect(world.state.status).toBe('running')
     expect(world.state.time).toBeCloseTo(simulatedTime, 3)

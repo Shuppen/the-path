@@ -226,6 +226,7 @@ export function App() {
     personalBestScore: 0,
   }))
 
+
   const performanceSample = useCanvasPerformanceMonitor({
     enabled: worldReady,
     sampleIntervalMs: deviceProfile.tier === 'low' ? 1400 : 900,
@@ -233,22 +234,30 @@ export function App() {
 
   const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
+
+  const isWideMobile = useMediaQuery('(min-width: 480px)')
+  const isTabletOrLarger = useMediaQuery('(min-width: 640px)')
+
   const [isSheetOpen, setSheetOpen] = useState(false)
 
   const canvasAspectStyle = useMemo(
-    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
-    [isSmallViewport]
+    () => ({ aspectRatio: isWideMobile ? '18 / 9' : '16 / 9' }),
+    [isWideMobile]
   )
 
   useEffect(() => {
+
     deviceProfileRef.current = deviceProfile
   }, [deviceProfile])
 
   useEffect(() => {
     if (isDesktop) {
+
+    if (isTabletOrLarger) {
+
       setSheetOpen(false)
     }
-  }, [isDesktop])
+  }, [isTabletOrLarger])
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
@@ -1282,8 +1291,8 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
-        {isDesktop ? (
+      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 pb-20 pt-10 sm:gap-10 sm:px-6 sm:pb-24 sm:pt-12">
+        {isTabletOrLarger ? (
           <div className="grid gap-10 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
             <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-xl ring-1 ring-white/10">
               {renderTrackControls(true)}
@@ -1318,7 +1327,7 @@ export function App() {
           </div>
         )}
       </main>
-      {!isDesktop ? (
+      {!isTabletOrLarger ? (
         <>
           <button
             type="button"
@@ -1330,6 +1339,10 @@ export function App() {
               'fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-cyan-400 text-slate-950 shadow-2xl transition md:hidden focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950',
               isSheetOpen && 'translate-y-12 opacity-0 pointer-events-none',
             )}
+            style={{
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+              right: 'calc(env(safe-area-inset-right, 0px) + 1.5rem)',
+            }}
           >
             <svg
               viewBox="0 0 24 24"

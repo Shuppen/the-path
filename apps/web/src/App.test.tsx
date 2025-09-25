@@ -106,7 +106,8 @@ describe('App', () => {
   it('disables UI transitions when reduced motion is preferred', () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': true,
-      '(min-width: 768px)': false,
+      '(min-width: 480px)': false,
+      '(min-width: 640px)': false,
     })
 
     try {
@@ -126,7 +127,8 @@ describe('App', () => {
   it('renders desktop layout when md breakpoint matches', () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': false,
-      '(min-width: 768px)': true,
+      '(min-width: 480px)': true,
+      '(min-width: 640px)': true,
     })
 
     try {
@@ -142,7 +144,8 @@ describe('App', () => {
   it('shows start overlay before the run and after pausing', async () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': false,
-      '(min-width: 768px)': true,
+      '(min-width: 480px)': true,
+      '(min-width: 640px)': true,
     })
 
     try {
@@ -174,7 +177,8 @@ describe('App', () => {
   it('switches to mobile layout when the breakpoint shrinks', async () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': false,
-      '(min-width: 768px)': true,
+      '(min-width: 480px)': true,
+      '(min-width: 640px)': true,
     })
 
     try {
@@ -182,7 +186,7 @@ describe('App', () => {
       expect(screen.queryByLabelText(/open controls/i)).not.toBeInTheDocument()
 
       act(() => {
-        media.setMatches('(min-width: 768px)', false)
+        media.setMatches('(min-width: 640px)', false)
       })
 
       await waitFor(() => expect(screen.getByLabelText(/open controls/i)).toBeInTheDocument())
@@ -194,7 +198,8 @@ describe('App', () => {
   it('opens the bottom sheet via the FAB on mobile', async () => {
     const media = setupMatchMedia({
       '(prefers-reduced-motion: reduce)': false,
-      '(min-width: 768px)': false,
+      '(min-width: 480px)': false,
+      '(min-width: 640px)': false,
     })
 
     try {

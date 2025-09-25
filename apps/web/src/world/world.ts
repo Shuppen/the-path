@@ -42,10 +42,10 @@ export interface WorldConfig {
 }
 
 export interface WorldUpdateInput {
-  jump: boolean
-  start: boolean
-  pause: boolean
-  restart: boolean
+  jump?: boolean
+  start?: boolean
+  pause?: boolean
+  restart?: boolean
   jumpHoldDuration: number
   pointer?: Vector2
   dt: number
