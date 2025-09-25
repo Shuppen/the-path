@@ -25,6 +25,8 @@ describe('uploadValidation', () => {
     expect(validateAudioFileType(createFile('beat.ogg', ''))).toBeNull()
     expect(validateAudioFileType(createFile('song.mp3', ''))).toBeNull()
     expect(validateAudioFileType(createFile('wave.wav', ''))).toBeNull()
+    expect(validateAudioFileType(createFile('take.WAVE', ''))).toBeNull()
+    expect(validateAudioFileType(createFile('ambience.oga', ''))).toBeNull()
   })
 
   it('rejects unsupported formats', () => {

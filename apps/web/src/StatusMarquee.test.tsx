@@ -113,4 +113,31 @@ describe('StatusMarquee', () => {
       expect(marquee).toHaveStyle({ animation: 'status-marquee 20s linear infinite' })
     })
   })
+
+  it('disables animation when reduced motion is preferred', async () => {
+    const message = 'Overflowing status message that would otherwise animate'
+    render(<StatusMarquee message={message} prefersReducedMotion />)
+
+    const marquee = screen.getByTestId('status-marquee-content')
+
+    Object.defineProperty(marquee, 'clientWidth', {
+      configurable: true,
+      get: () => 200,
+    })
+
+    Object.defineProperty(marquee, 'scrollWidth', {
+      configurable: true,
+      get: () => 400,
+    })
+
+    act(() => {
+      triggerResize(marquee)
+    })
+
+    await waitFor(() => {
+      expect(marquee).toHaveStyle({ animation: 'none' })
+    })
+
+    expect(screen.getAllByText(message)).toHaveLength(1)
+  })
 })

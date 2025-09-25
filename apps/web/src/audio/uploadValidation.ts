@@ -6,7 +6,16 @@ export const ACCEPTED_MIME_TYPES = new Set<string>([
   'audio/x-wav',
 ])
 
-export const ACCEPTED_EXTENSIONS = new Set<string>(['mp3', 'ogg', 'wav'])
+export const ACCEPTED_EXTENSIONS = new Set<string>(['mp3', 'ogg', 'oga', 'wav', 'wave'])
+
+export const FILE_INPUT_ACCEPT = [
+  ...ACCEPTED_MIME_TYPES,
+  '.mp3',
+  '.ogg',
+  '.oga',
+  '.wav',
+  '.wave',
+].join(',')
 
 export const MIN_AUDIO_DURATION_SECONDS = 5
 export const MAX_AUDIO_DURATION_SECONDS = 600
