@@ -108,7 +108,7 @@ export function TrackUpload({
       <input
         ref={inputRef}
         type="file"
-        accept="audio/*"
+        accept=".ogg,.mp3,.wav"
         tabIndex={-1}
         className="hidden"
         onChange={(event) => handleFiles(event.target.files)}
@@ -124,7 +124,7 @@ export function TrackUpload({
       </button>
 
       <p className="mt-2 text-xs text-slate-400">
-        Поддерживаются {describeAcceptedFormats()} · перетащите файл на экран или выберите вручную.
+        Поддерживаются форматы {describeAcceptedFormats()} · перетащите файл на экран или выберите вручную.
       </p>
       {combinedError ? <p className="mt-1 text-xs text-rose-300">{combinedError}</p> : null}
 
