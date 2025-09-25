@@ -29,6 +29,11 @@ A pnpm-powered monorepo that hosts the **web MVP** for The Path alongside shared
    ```
    The Canvas MVP is served at [http://localhost:5173](http://localhost:5173).
 
+   > ℹ️  For mobile devices on the same network, expose the dev server by appending Vite flags:
+   > ```bash
+   > pnpm dev -- --host 0.0.0.0 --port 5173
+   > ```
+
 3. **Run quality gates**:
    ```bash
    pnpm lint        # ESLint across apps + packages
@@ -42,6 +47,35 @@ A pnpm-powered monorepo that hosts the **web MVP** for The Path alongside shared
    ```bash
    pnpm format
    ```
+
+5. **Serve a production build** (useful for profiling on devices):
+   ```bash
+   pnpm build
+   pnpm --filter @the-path/web preview -- --host 0.0.0.0 --port 4173
+   ```
+   The preview server renders the `dist/` bundle at [http://localhost:4173](http://localhost:4173) (or the LAN IP when testing on hardware).
+
+## Mobile device setup
+
+To validate the web MVP on mobile hardware, connect phones to the same network as the host machine and expose the dev/preview server with `--host 0.0.0.0`.
+
+### Android (Chrome)
+
+1. Enable **Developer options** and **USB debugging** on the device.
+2. Connect via USB and run `adb devices` to confirm the pairing; forward the Vite port if you prefer a wired workflow:
+   ```bash
+   adb reverse tcp:5173 tcp:5173        # dev server
+   adb reverse tcp:4173 tcp:4173        # preview server
+   ```
+3. Open Chrome and visit `chrome://inspect` on the host to remote-debug the page. Use the **Sensors** panel to simulate orientation/geo inputs when needed.
+
+### iOS (Safari)
+
+1. Enable **Web Inspector** in *Settings → Safari → Advanced* on the device.
+2. Start the dev or preview server with `--host 0.0.0.0` and note the host machine's LAN IP (e.g. `http://192.168.1.20:5173`).
+3. Connect the device via USB (or the same Wi-Fi) and open Safari → **Develop** menu on macOS to inspect the page. The **Timelines** and **Rendering** tabs expose FPS and layout shift telemetry.
+
+For extended profiling instructions, see [`docs/MOBILE_QA_GUIDE.md`](./docs/MOBILE_QA_GUIDE.md).
 
 ## Canvas MVP
 
@@ -98,6 +132,7 @@ Mobile cold-start metrics guide development and QA:
 | Steady-state frame rate | **60 FPS** | Maintain fluid pointer/touch response under canvas animation load. |
 | JS bundle (compressed) | **≤ 150 kB** | Enforce via bundler budgets; monitor route-level code splitting. |
 | Total mobile download | **≤ 8 MB** | Includes fonts, textures, audio on first meaningful paint. |
+| Input latency (pointer-to-frame) | **≤ 50 ms** | Profile via Chrome DevTools or Safari Rendering FPS charts. |
 
 QA must capture these metrics on both Android (Chrome) and iOS (Safari); see `QA_CHECKLIST.md` for the full runbook.
 
