@@ -13,7 +13,14 @@ import { createSeed } from '../core/prng'
 import { createGameLoop, type LoopController } from '../engine/loop'
 import { InputManager } from '../engine/input'
 import { SceneRenderer } from '../render/sceneRenderer'
-import { World, type WorldSnapshot } from '../world'
+import {
+  World,
+  type WorldSnapshot,
+  type CalibrationSettings,
+  type ActiveUpgrade,
+  type WorldMode,
+  type MetaProgressState,
+} from '../world'
 import PauseScreen from './Pause'
 import { padScore } from '../ui/scoreFormatting'
 
@@ -21,6 +28,10 @@ interface GameScreenProps {
   track: AudioTrackManifestEntry
   audio: WebAudioAnalysis
   dprCap: number
+  calibration: CalibrationSettings
+  upgrades: ActiveUpgrade[]
+  mode: WorldMode
+  meta: MetaProgressState
   onComplete: (snapshot: WorldSnapshot) => void
   onExit: (snapshot: WorldSnapshot | null) => void
 }
@@ -30,6 +41,9 @@ interface HudState {
   combo: number
   bestCombo: number
   accuracy: number
+  comboMultiplier: number
+  feverMeter: number
+  health: number
   playback: AudioPlaybackState
   progress: ProgressEvent | null
 }
@@ -39,11 +53,14 @@ const initialHudState: HudState = {
   combo: 0,
   bestCombo: 0,
   accuracy: 1,
+  comboMultiplier: 1,
+  feverMeter: 0,
+  health: 3,
   playback: 'idle',
   progress: null,
 }
 
-export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScreenProps) {
+export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, meta, onComplete, onExit }: GameScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const loopRef = useRef<LoopController | null>(null)
   const inputRef = useRef<InputManager | null>(null)
@@ -67,6 +84,9 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
       combo: snapshot.combo,
       bestCombo: snapshot.bestCombo,
       accuracy: snapshot.accuracy,
+      comboMultiplier: world.state.comboMultiplier,
+      feverMeter: world.state.feverMeter,
+      health: world.state.runner.health,
     }))
   }, [])
 
@@ -121,7 +141,15 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
       return undefined
     }
 
-    const world = new World({ seed: sessionSeed, width: canvas.width, height: canvas.height })
+    const world = new World({
+      seed: sessionSeed,
+      width: canvas.width,
+      height: canvas.height,
+      calibration,
+      upgrades,
+      mode,
+      meta,
+    })
     world.state.status = 'running'
     worldRef.current = world
     updateMetrics()
@@ -141,7 +169,14 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
     input.bind()
     inputRef.current = input
 
-    setHud((previous) => ({ ...initialHudState, playback: previous.playback, progress: previous.progress }))
+    setHud((previous) => ({
+      ...initialHudState,
+      playback: previous.playback,
+      progress: previous.progress,
+      comboMultiplier: world.state.comboMultiplier,
+      feverMeter: world.state.feverMeter,
+      health: world.state.runner.health,
+    }))
 
     const loop = createGameLoop(
       {
@@ -174,7 +209,17 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
       window.removeEventListener('orientationchange', resizeHandler)
       teardown()
     }
-  }, [audio, sessionSeed, teardown, updateHudFromWorld, updateMetrics])
+  }, [audio, calibration, meta, mode, sessionSeed, teardown, updateHudFromWorld, updateMetrics, upgrades])
+
+  useEffect(() => {
+    if (!worldRef.current) return
+    worldRef.current.setCalibration(calibration)
+  }, [calibration])
+
+  useEffect(() => {
+    if (!worldRef.current) return
+    worldRef.current.setActiveUpgrades(upgrades)
+  }, [upgrades])
 
   useEffect(() => {
     const world = worldRef.current
@@ -275,11 +320,13 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
         <div className="pointer-events-auto rounded-2xl border border-slate-700/60 bg-slate-900/60 px-4 py-2 shadow-lg">
           <p className="text-xs font-semibold text-white">{selectedTrack.title}</p>
           <p className="text-[0.65rem] text-slate-400">{selectedTrack.artist}</p>
+          <p className="mt-1 text-[0.65rem] uppercase tracking-[0.25em] text-cyan-300/70">{mode === 'endless' ? 'Endless' : 'Track'}</p>
         </div>
         <div className="pointer-events-auto flex items-center gap-4">
           <div className="text-right">
             <p className="font-mono text-2xl text-white">{padScore(hud.score)}</p>
-            <p className="text-xs text-cyan-200">Комбо {hud.combo}</p>
+            <p className="text-xs text-cyan-200">Комбо {hud.combo} ×{hud.comboMultiplier}</p>
+            <p className="text-[0.65rem] text-rose-200/80">HP {hud.health}</p>
           </div>
           <button
             type="button"
@@ -293,7 +340,7 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
 
       <div className="flex-1 px-6 py-4">
         <div className="relative mx-auto aspect-[9/16] w-full max-w-md overflow-hidden rounded-[2.5rem] border border-slate-700/60 bg-slate-900">
-          <canvas ref={canvasRef} className="h-full w-full" role="presentation" />
+          <canvas ref={canvasRef} className="h-full w-full" role="presentation" style={{ touchAction: 'none' }} />
           {paused ? (
             <PauseScreen
               onResume={handlePauseToggle}
@@ -315,6 +362,7 @@ export function GameScreen({ track, audio, dprCap, onComplete, onExit }: GameScr
           <span>
             {hud.progress ? `${Math.floor(hud.progress.progress * 100)}%` : hud.playback === 'loading' ? 'Подготовка…' : ''}
           </span>
+          <span className="text-xs text-cyan-200">Фивер {Math.round(hud.feverMeter * 100)}%</span>
         </div>
       </footer>
     </div>

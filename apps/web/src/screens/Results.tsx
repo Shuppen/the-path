@@ -1,5 +1,5 @@
 import type { AudioTrackManifestEntry } from '../assets/tracks'
-import type { WorldSnapshot } from '../world'
+import type { ActiveUpgrade, UpgradeCard, WorldSnapshot } from '../world'
 
 interface ResultsScreenProps {
   track: AudioTrackManifestEntry
@@ -7,6 +7,8 @@ interface ResultsScreenProps {
   onRetry: () => void
   onHome: () => void
   onSongSelect: () => void
+  onSelectUpgrade: (card: UpgradeCard) => void
+  upgrades: ActiveUpgrade[]
 }
 
 const getStarCount = (accuracy: number): number => {
@@ -19,9 +21,18 @@ const getStarCount = (accuracy: number): number => {
 
 const formatPercent = (value: number): string => `${(value * 100).toFixed(1)}%`
 
-export function ResultsScreen({ track, snapshot, onRetry, onHome, onSongSelect }: ResultsScreenProps) {
+export function ResultsScreen({
+  track,
+  snapshot,
+  onRetry,
+  onHome,
+  onSongSelect,
+  onSelectUpgrade,
+  upgrades,
+}: ResultsScreenProps) {
   const stars = getStarCount(snapshot.accuracy)
   const starIcons = Array.from({ length: 3 }, (_, index) => index < stars)
+  const hasChoices = snapshot.upgrades.offered.length > 0
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-between bg-[#0B0F14] px-6 py-16 text-slate-100">
@@ -59,7 +70,31 @@ export function ResultsScreen({ track, snapshot, onRetry, onHome, onSongSelect }
               {snapshot.hits} / {snapshot.hits + snapshot.misses}
             </span>
           </div>
+          <div className="flex items-center justify-between text-xs text-slate-400 sm:text-sm">
+            <span>Фивер</span>
+            <span>{snapshot.feverActivations}</span>
+          </div>
         </div>
+
+        {hasChoices ? (
+          <section className="space-y-3 rounded-3xl border border-slate-700/60 bg-slate-900/80 p-6">
+            <h2 className="text-sm font-semibold text-white">Выберите апгрейд</h2>
+            <p className="text-xs text-slate-400">Активные карты: {upgrades.length}</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {snapshot.upgrades.offered.map((card) => (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => onSelectUpgrade(card)}
+                  className="flex flex-col gap-2 rounded-2xl border border-slate-700/60 bg-slate-900/80 p-4 text-left transition hover:border-cyan-400/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+                >
+                  <span className="text-sm font-semibold text-white">{card.name}</span>
+                  <span className="text-xs text-slate-300">{card.description}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </main>
 
       <footer className="w-full max-w-xl space-y-3">

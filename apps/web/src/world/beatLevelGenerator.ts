@@ -1,6 +1,6 @@
-import { BASE_BPM, NOTE_PRELOAD_TIME } from './constants'
+import { ENDLESS_DENSITY_STEP, ENDLESS_SPEED_STEP, NOTE_PRELOAD_TIME } from './constants'
 import type { Prng } from '../core/prng'
-import type { LaneIndex, LaneNote, WorldState } from './types'
+import type { LaneIndex, LaneNote, LaneObstacle, WorldState } from './types'
 
 export interface BeatLevelGeneratorOptions {
   bpm?: number
@@ -22,7 +22,9 @@ export class BeatLevelGenerator {
   private nextBeatTime: number
   private beatIndex = 0
   private noteId = 0
-  private lastLane: LaneIndex | null = null
+  private obstacleId = 0
+  private laneHistory: LaneIndex[] = []
+  private obstacleCooldown = 0
   private tempoAdjustment = 0
   private lastExternalBeat: number | null = null
 
@@ -30,7 +32,7 @@ export class BeatLevelGenerator {
     private readonly prng: Prng,
     options: BeatLevelGeneratorOptions = {},
   ) {
-    const bpm = options.bpm ?? BASE_BPM
+    const bpm = options.bpm ?? 120
     this.baseBeatInterval = 60 / Math.max(1, bpm)
     this.beatInterval = this.baseBeatInterval
     this.initialOffset = options.initialOffset ?? 0
@@ -40,21 +42,25 @@ export class BeatLevelGenerator {
   reset(): void {
     this.beatIndex = 0
     this.noteId = 0
+    this.obstacleId = 0
     this.nextBeatTime = this.initialOffset
-    this.lastLane = null
+    this.laneHistory.length = 0
     this.tempoAdjustment = 0
     this.lastExternalBeat = null
+    this.obstacleCooldown = 0
   }
 
   update(world: WorldState, leadTime: number = NOTE_PRELOAD_TIME): void {
     if (world.status !== 'running') return
 
     this.relaxTempo(world.time)
+    this.updateEndlessScaling(world)
     const targetTime = world.time + leadTime
 
     while (this.nextBeatTime <= targetTime) {
       const note = this.createNote(this.nextBeatTime)
       world.notes.push(note)
+      this.maybeSpawnObstacle(world, this.nextBeatTime)
       this.nextBeatTime += this.beatInterval
       this.beatIndex += 1
     }
@@ -64,26 +70,58 @@ export class BeatLevelGenerator {
 
   private createNote(time: number): LaneNote {
     const lane: LaneIndex = this.pickLane()
-    this.lastLane = lane
+    this.laneHistory.push(lane)
+    if (this.laneHistory.length > 2) {
+      this.laneHistory.shift()
+    }
     return {
       id: (this.noteId += 1),
       lane,
       time,
+      kind: 'tap',
       judged: false,
     }
   }
 
   private pickLane(): LaneIndex {
-    if (this.lastLane === null) {
-      return this.prng.pick(LANE_POOL)
+    const history = this.laneHistory.slice(-2)
+    const forbidden = history.length === 2 && history[0] === history[1] ? history[0] : null
+    if (forbidden !== null) {
+      const options = LANE_POOL.filter((lane) => lane !== forbidden)
+      return this.prng.pick(options as LaneIndex[])
     }
 
-    if (this.prng.next() < 0.6) {
-      const options = LANE_POOL.filter((lane) => lane !== this.lastLane)
+    if (history.length === 1 && this.prng.next() < 0.35) {
+      const options = LANE_POOL.filter((lane) => lane !== history[0])
       return this.prng.pick(options as LaneIndex[])
     }
 
     return this.prng.pick(LANE_POOL)
+  }
+
+  private maybeSpawnObstacle(world: WorldState, time: number): void {
+    if (this.obstacleCooldown > 0) {
+      this.obstacleCooldown -= 1
+      return
+    }
+
+    const difficulty =
+      world.mode === 'endless' ? Math.min(1.2, 0.3 + world.speedMultiplier * ENDLESS_DENSITY_STEP) : 0.3
+    if (this.prng.next() > difficulty) {
+      return
+    }
+
+    const lane = this.pickLane()
+    const obstacle: LaneObstacle = {
+      id: (this.obstacleId += 1),
+      lane,
+      time: time + this.beatInterval * 0.5,
+      kind: this.prng.next() > 0.5 ? 'enemy' : 'obstacle',
+      damage: 1,
+      resolved: false,
+    }
+    world.obstacles.push(obstacle)
+    this.obstacleCooldown = this.prng.nextInt(2, 5)
   }
 
   private relaxTempo(currentTime: number): void {
@@ -97,6 +135,15 @@ export class BeatLevelGenerator {
 
     const clampedAdjustment = clamp(this.tempoAdjustment, -0.35, 0.45)
     this.beatInterval = clamp(this.baseBeatInterval * (1 + clampedAdjustment), 0.2, 1.6)
+  }
+
+  private updateEndlessScaling(world: WorldState): void {
+    if (world.mode !== 'endless') {
+      return
+    }
+
+    const ramp = 1 + world.speedMultiplier * ENDLESS_SPEED_STEP
+    this.beatInterval = clamp(this.baseBeatInterval / ramp, 0.15, 1.2)
   }
 
   syncToExternalBeat(time: number, confidence = 1): void {

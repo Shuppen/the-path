@@ -4,6 +4,8 @@ export type LaneIndex = 0 | 1 | 2 | 3
 
 export type Judgement = 'perfect' | 'good' | 'miss'
 
+export type WorldMode = 'track' | 'endless'
+
 export interface StageMetrics {
   width: number
   height: number
@@ -18,9 +20,20 @@ export interface LaneNote {
   id: number
   lane: LaneIndex
   time: number
+  kind: 'tap' | 'hold'
+  duration?: number
   judgement?: Judgement
   judged: boolean
   hitTime?: number
+}
+
+export interface LaneObstacle {
+  id: number
+  lane: LaneIndex
+  time: number
+  kind: 'obstacle' | 'enemy'
+  damage: number
+  resolved: boolean
 }
 
 export interface NoteFeedback {
@@ -29,6 +42,22 @@ export interface NoteFeedback {
   createdAt: number
   x: number
   y: number
+}
+
+export interface CalibrationSettings {
+  inputOffsetMs: number
+  audioOffsetMs: number
+}
+
+export interface UpgradeCard {
+  id: string
+  name: string
+  description: string
+  effect: 'damage' | 'shield' | 'fever'
+}
+
+export interface ActiveUpgrade extends UpgradeCard {
+  stacks: number
 }
 
 export interface RunnerState {
@@ -46,6 +75,24 @@ export interface RunnerState {
   perfectHits: number
   goodHits: number
   missHits: number
+  health: number
+  maxHealth: number
+  shield: number
+  perfectStreak: number
+  beatCounter: number
+  comboMultiplier: number
+  feverMeter: number
+  feverActive: boolean
+  feverTimer: number
+  feverActivations: number
+  damageBonus: number
+}
+
+export interface MetaProgressState {
+  xp: number
+  level: number
+  unlockedTracks: string[]
+  unlockedSkins: string[]
 }
 
 export interface WorldState {
@@ -56,9 +103,18 @@ export interface WorldState {
   stage: StageMetrics
   lanes: { count: number }
   notes: LaneNote[]
+  obstacles: LaneObstacle[]
   runner: RunnerState
   feedback: NoteFeedback[]
   accuracy: number
+  comboMultiplier: number
+  feverMeter: number
+  mode: WorldMode
+  calibration: CalibrationSettings
+  speedMultiplier: number
+  activeUpgrades: ActiveUpgrade[]
+  pendingUpgrades: UpgradeCard[]
+  meta: MetaProgressState
 }
 
 export interface WorldSnapshot {
@@ -70,4 +126,13 @@ export interface WorldSnapshot {
   accuracy: number
   hits: number
   misses: number
+  health: number
+  feverActivations: number
+  xpEarned: number
+  mode: WorldMode
+  upgrades: {
+    active: ActiveUpgrade[]
+    offered: UpgradeCard[]
+  }
+  meta: MetaProgressState
 }
