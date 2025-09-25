@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 interface BottomSheetProps {
   open: boolean
@@ -35,6 +35,9 @@ const BottomSheet = ({
   const [dragOffset, setDragOffset] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const handleRef = useRef<HTMLButtonElement | null>(null)
+  const autoId = useId()
+  const sheetId = id ?? autoId
+  const titleId = title ? `${sheetId}-title` : undefined
 
   useEffect(() => {
     if (!open) {
@@ -120,24 +123,25 @@ const BottomSheet = ({
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center md:hidden" aria-hidden={!open}>
+    <div className="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center px-3 md:hidden" aria-hidden={!open}>
       <div
-        className="pointer-events-auto fixed inset-0 z-30 bg-slate-950/70 backdrop-blur-sm"
+        className="pointer-events-auto fixed inset-0 z-30 bg-surface-overlay/80 backdrop-blur-sm"
         style={overlayStyle}
         aria-hidden="true"
         onClick={() => onOpenChange(false)}
         data-testid="bottom-sheet-overlay"
       />
       <div
-        className="z-40 w-full max-w-3xl rounded-t-3xl border border-white/10 bg-slate-900/95 shadow-[0_-20px_45px_rgba(8,47,73,0.35)]"
+        className="z-40 w-full max-w-3xl overflow-hidden rounded-t-3xl border border-border-strong bg-surface-raised/95 shadow-panel backdrop-blur-xl"
         role="dialog"
         aria-modal="true"
         aria-hidden={!open}
-        id={id}
+        aria-labelledby={titleId}
+        id={sheetId}
         style={sheetStyle}
         data-testid="bottom-sheet"
       >
-        <div className="flex flex-col gap-4 px-6 pb-8 pt-4">
+        <div className="flex flex-col gap-4 px-6 pb-8 pt-5">
           <button
             type="button"
             aria-label="Drag handle"
@@ -146,14 +150,18 @@ const BottomSheet = ({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerEnd}
             onPointerCancel={handlePointerEnd}
-            className="mx-auto h-1.5 w-14 touch-none rounded-full bg-slate-500/60"
+            className="mx-auto h-1.5 w-14 touch-none rounded-full bg-white/25"
           />
           <div className="flex items-center justify-between">
-            {title ? <h2 className="text-base font-semibold text-slate-100">{title}</h2> : null}
+            {title ? (
+              <h2 id={titleId} className="text-base font-semibold text-slate-100">
+                {title}
+              </h2>
+            ) : null}
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-700/60 bg-slate-900 text-slate-200 transition hover:bg-slate-800"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/80 text-slate-100 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base hover:bg-surface-overlay"
               aria-label="Close controls"
             >
               <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -161,8 +169,8 @@ const BottomSheet = ({
               </svg>
             </button>
           </div>
-          <div className="overflow-y-auto pe-2" style={{ maxHeight: '70vh' }}>
-            <div className="space-y-6 pe-2">{children}</div>
+          <div className="overflow-y-auto pe-1" style={{ maxHeight: '70vh' }}>
+            <div className="space-y-6 pe-1">{children}</div>
           </div>
         </div>
       </div>
