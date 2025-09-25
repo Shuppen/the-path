@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ViewportMetrics } from '@the-path/types'
-import { getViewportMetrics, resizeCanvasToDisplaySize } from '@the-path/utils'
+import type { DevicePerformanceProfile, ViewportMetrics } from '@the-path/types'
+import {
+  areViewportMetricsEqual,
+  getDevicePerformanceProfile,
+  getViewportMetrics,
+  resizeCanvasToDisplaySize,
+} from '@the-path/utils'
 
 import { createSeed } from './core/prng'
 import { createGameLoop } from './engine/loop'
@@ -16,6 +21,8 @@ import TrackUpload from './ui/TrackUpload'
 import { LeadersBoard } from './ui/LeadersBoard'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
 import useMediaQuery from './hooks/useMediaQuery'
+import { useCanvasPerformanceMonitor } from './hooks/useCanvasPerformanceMonitor'
+import CanvasDiagnosticsOverlay from './components/canvas/CanvasDiagnosticsOverlay'
 import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
 import {
   type StoredRecentTrack,
@@ -32,6 +39,19 @@ const clamp01 = (value: number): number => {
   if (value < 0) return 0
   if (value > 1) return 1
   return value
+}
+
+const shouldUpdateProfile = (
+  previous: DevicePerformanceProfile,
+  next: DevicePerformanceProfile,
+): boolean => {
+  if (previous === next) return false
+  if (previous.tier !== next.tier) return true
+  if (previous.pixelBudget !== next.pixelBudget) return true
+  if (Math.abs(previous.recommendedDevicePixelRatio - next.recommendedDevicePixelRatio) > 0.05) return true
+  if (previous.isMobile !== next.isMobile) return true
+  if (previous.prefersReducedMotion !== next.prefersReducedMotion) return true
+  return false
 }
 
 const formatTime = (value: number): string => {
@@ -157,6 +177,9 @@ export function App() {
   const seedRef = useRef<string>(createSeed())
   const audioRef = useRef<WebAudioAnalysis | null>(null)
   const recorderRef = useRef<CanvasRecorder | null>(null)
+  const [canvasMetrics, setCanvasMetrics] = useState<ViewportMetrics | null>(null)
+  const [deviceProfile, setDeviceProfile] = useState<DevicePerformanceProfile>(() => getDevicePerformanceProfile())
+  const deviceProfileRef = useRef<DevicePerformanceProfile>(deviceProfile)
 
   const prefersReducedMotion = usePrefersReducedMotion()
 
@@ -203,20 +226,38 @@ export function App() {
     personalBestScore: 0,
   }))
 
+
+  const performanceSample = useCanvasPerformanceMonitor({
+    enabled: worldReady,
+    sampleIntervalMs: deviceProfile.tier === 'low' ? 1400 : 900,
+  })
+
   const isSmallViewport = useMediaQuery('(min-width: 640px)')
   const isDesktop = useMediaQuery('(min-width: 768px)')
+
+  const isWideMobile = useMediaQuery('(min-width: 480px)')
+  const isTabletOrLarger = useMediaQuery('(min-width: 640px)')
+
   const [isSheetOpen, setSheetOpen] = useState(false)
 
   const canvasAspectStyle = useMemo(
-    () => ({ aspectRatio: isSmallViewport ? '18 / 9' : '16 / 9' }),
-    [isSmallViewport]
+    () => ({ aspectRatio: isWideMobile ? '18 / 9' : '16 / 9' }),
+    [isWideMobile]
   )
 
   useEffect(() => {
+
+    deviceProfileRef.current = deviceProfile
+  }, [deviceProfile])
+
+  useEffect(() => {
     if (isDesktop) {
+
+    if (isTabletOrLarger) {
+
       setSheetOpen(false)
     }
-  }, [isDesktop])
+  }, [isTabletOrLarger])
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
@@ -441,19 +482,47 @@ export function App() {
     const canvas = canvasRef.current
     if (!canvas) return undefined
 
-    const context = canvas.getContext('2d', { alpha: false })
-    if (!context) return undefined
+    const commitProfile = (profile: DevicePerformanceProfile) => {
+      deviceProfileRef.current = profile
+      setDeviceProfile((previous) => (shouldUpdateProfile(previous, profile) ? profile : previous))
+    }
 
-    const metrics = getViewportMetrics(canvas)
-    metricsRef.current = metrics
-    resizeCanvasToDisplaySize(canvas, metrics)
+    const commitMetrics = (next: ViewportMetrics) => {
+      metricsRef.current = next
+      setCanvasMetrics((previous) => (areViewportMetricsEqual(previous, next) ? previous : next))
+    }
+
+    const initialProfile = getDevicePerformanceProfile({
+      canvasWidth: canvas.clientWidth,
+      canvasHeight: canvas.clientHeight,
+      devicePixelRatio: globalThis.devicePixelRatio ?? 1,
+    })
+    commitProfile(initialProfile)
+
+    const initialMetrics = getViewportMetrics(canvas, {
+      performanceProfile: initialProfile,
+      pixelBudget: initialProfile.pixelBudget,
+    })
+    resizeCanvasToDisplaySize(canvas, initialMetrics)
+    commitMetrics(initialMetrics)
+
+    const contextAttributes: CanvasRenderingContext2DSettings = { alpha: false }
+    if (initialProfile.tier === 'low') {
+      contextAttributes.desynchronized = true
+    }
+    const context =
+      canvas.getContext('2d', contextAttributes) ?? canvas.getContext('2d', { alpha: false })
+    if (!context) {
+      return undefined
+    }
 
     const world = new World({
       seed: seedRef.current,
-      width: canvas.width || Math.max(metrics.width, 1),
-      height: canvas.height || Math.max(metrics.height, 1),
+      width: canvas.width || Math.max(initialMetrics.width, 1),
+      height: canvas.height || Math.max(initialMetrics.height, 1),
     })
     worldRef.current = world
+    world.setViewport(canvas.width, canvas.height)
 
     const audio = audioRef.current
     let detachAudioEvents: (() => void) | undefined
@@ -491,42 +560,72 @@ export function App() {
     renderer.render(world.state)
 
     const updateMetrics = () => {
-      const next = getViewportMetrics(canvas)
-      metricsRef.current = next
+      const profile = getDevicePerformanceProfile({
+        canvasWidth: canvas.clientWidth,
+        canvasHeight: canvas.clientHeight,
+        devicePixelRatio: metricsRef.current?.devicePixelRatio ?? globalThis.devicePixelRatio ?? 1,
+        pixelBudget: deviceProfileRef.current.pixelBudget,
+      })
+      commitProfile(profile)
+      const next = getViewportMetrics(canvas, {
+        performanceProfile: profile,
+        pixelBudget: profile.pixelBudget,
+      })
       resizeCanvasToDisplaySize(canvas, next)
+      commitMetrics(next)
       world.setViewport(canvas.width, canvas.height)
     }
 
-    updateMetrics()
+    let resizeObserver: ResizeObserver | undefined
+    let resizeFrame = 0
+    let pendingResize = false
 
-    const resizeObserver = new ResizeObserver(() => updateMetrics())
-    resizeObserver.observe(canvas)
-    window.addEventListener('resize', updateMetrics)
+    const enqueueMetricsUpdate = () => {
+      if (pendingResize) return
+      pendingResize = true
+      resizeFrame = requestAnimationFrame(() => {
+        pendingResize = false
+        updateMetrics()
+      })
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => enqueueMetricsUpdate())
+      resizeObserver.observe(canvas)
+    }
+
+    window.addEventListener('resize', enqueueMetricsUpdate)
+    window.addEventListener('orientationchange', enqueueMetricsUpdate)
 
     const handleRunRestart = () => {
       resetAudioTimeline()
     }
 
-    const loop = createGameLoop({
-      update: (dt) => {
-        input.setStatus(world.state.status)
-        const snapshot = input.consumeActions()
+    const loop = createGameLoop(
+      {
+        update: (dt) => {
+          input.setStatus(world.state.status)
+          const snapshot = input.consumeActions()
 
-        world.update({
-          ...snapshot,
-          dt,
-          onRunRestart: handleRunRestart,
-        })
-        if (world.consumePendingReset()) {
-          resetAudioTimeline()
-        }
+          world.update({
+            ...snapshot,
+            dt,
+            onRunRestart: handleRunRestart,
+          })
+          if (world.consumePendingReset()) {
+            resetAudioTimeline()
+          }
 
-        updateHud()
+          updateHud()
+        },
+        render: (alpha) => {
+          renderer.render(world.state, alpha)
+        },
       },
-      render: (alpha) => {
-        renderer.render(world.state, alpha)
+      {
+        performanceProfile: () => deviceProfileRef.current,
       },
-    })
+    )
     loop.start()
     setWorldReady(true)
 
@@ -537,11 +636,18 @@ export function App() {
       if (inputRef.current === input) {
         inputRef.current = null
       }
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', updateMetrics)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
+      window.removeEventListener('resize', enqueueMetricsUpdate)
+      window.removeEventListener('orientationchange', enqueueMetricsUpdate)
+      if (resizeFrame) {
+        cancelAnimationFrame(resizeFrame)
+      }
       if (detachAudioEvents) detachAudioEvents()
       setWorldReady(false)
       if (worldRef.current === world) worldRef.current = null
+      metricsRef.current = null
     }
   }, [pushHud, resetAudioTimeline])
 
@@ -800,11 +906,11 @@ export function App() {
     <div className="space-y-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Soundtrack</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-accent-cyan/80">Soundtrack</p>
           <h2 className="text-2xl font-semibold text-slate-50 sm:text-3xl">{selectedTrack?.title}</h2>
-          <p className="text-sm text-slate-400">{selectedTrack?.artist}</p>
+          <p className="text-sm text-slate-300">{selectedTrack?.artist}</p>
           {selectedTrack?.description ? (
-            <p className="text-sm text-slate-400/80">{selectedTrack.description}</p>
+            <p className="text-sm text-slate-300/80">{selectedTrack.description}</p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -812,7 +918,7 @@ export function App() {
             type="button"
             onClick={handleTogglePlayback}
             disabled={audioState === 'loading' || !audioSupported}
-            className="inline-flex items-center justify-center rounded-full border border-cyan-400/60 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/25 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-full border border-accent-cyan/60 bg-accent-cyan/15 px-4 py-2 text-sm font-semibold text-accent-cyan shadow-glow transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base hover:bg-accent-cyan/25 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {audioSupported
               ? audioState === 'playing'
@@ -823,27 +929,27 @@ export function App() {
           <button
             type="button"
             onClick={handleRestartTrack}
-            className="inline-flex items-center justify-center rounded-full border border-slate-200/40 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20"
+            className="inline-flex items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base hover:bg-surface-overlay"
           >
             Restart track
           </button>
         </div>
       </div>
       <div className="space-y-3">
-        <div className="relative h-2 overflow-hidden rounded-full bg-slate-800/60">
+        <div className="relative h-2 overflow-hidden rounded-full bg-surface-overlay/70">
           <div
             data-testid="audio-progress-fill"
-            className="absolute inset-y-0 left-0 bg-cyan-400/80 transition-all"
+            className="absolute inset-y-0 left-0 bg-accent-cyan/80 transition-all"
             style={{
               width: `${Math.round(clamp01(audioProgress.progress) * 100)}%`,
               transition: prefersReducedMotion ? 'none' : undefined,
             }}
           />
         </div>
-        <div className="flex items-center justify-between text-xs text-slate-400 sm:text-sm">
-          <span className="font-mono text-slate-300">{formatTime(audioProgress.time)}</span>
+        <div className="flex items-center justify-between text-xs text-slate-300 sm:text-sm">
+          <span className="font-mono text-slate-200">{formatTime(audioProgress.time)}</span>
           <span>{playbackStatus}</span>
-          <span className="font-mono text-slate-300">{formatTime(audioProgress.duration)}</span>
+          <span className="font-mono text-slate-200">{formatTime(audioProgress.duration)}</span>
         </div>
       </div>
     </div>
@@ -859,10 +965,10 @@ export function App() {
             type="button"
             onClick={() => handleSelectTrack(track.id)}
             className={classNames(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition',
+              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
               isSelected
-                ? 'bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/60'
-                : 'bg-slate-800/70 text-slate-300 hover:bg-slate-700/70',
+                ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/60 shadow-glow'
+                : 'bg-surface-overlay/70 text-slate-300 hover:bg-surface-overlay/90',
             )}
           >
             <span className="font-medium">{track.title}</span>
@@ -879,10 +985,10 @@ export function App() {
             type="button"
             onClick={() => handleSelectTrack(track.id)}
             className={classNames(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition',
+              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
               isSelected
-                ? 'bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-400/50'
-                : 'bg-slate-800/70 text-slate-300 hover:bg-slate-700/70',
+                ? 'bg-accent-cyan/20 text-accent-cyan ring-1 ring-accent-cyan/60 shadow-glow'
+                : 'bg-surface-overlay/70 text-slate-300 hover:bg-surface-overlay/90',
             )}
           >
             <span className="font-medium">{track.title}</span>
@@ -903,10 +1009,10 @@ export function App() {
         onClearError={() => setUploadError(null)}
       />
       {recentTracks.length > 0 ? (
-        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm shadow-lg shadow-slate-900/30">
+        <div className="rounded-2xl border border-border-subtle bg-surface-raised/80 p-4 text-sm shadow-panel">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Последние треки</p>
-            <span className="text-[0.65rem] text-slate-500">
+            <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Последние треки</p>
+            <span className="text-[0.65rem] text-slate-400">
               Запоминаем до {MAX_RECENT_TRACKS} последних загрузок за сессию
             </span>
           </div>
@@ -918,11 +1024,11 @@ export function App() {
                   key={`recent-${entry.id}`}
                   type="button"
                   onClick={() => handleSelectRecentTrack(entry)}
-                  className="flex w-full items-center justify-between rounded-xl border border-slate-200/20 bg-slate-800/60 px-3 py-2 text-left transition hover:bg-slate-700/60"
+                  className="flex w-full items-center justify-between rounded-xl border border-border-subtle bg-surface-overlay/70 px-3 py-2 text-left transition hover:bg-surface-overlay/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
                 >
                   <span className="flex flex-col text-xs">
-                    <span className="font-semibold text-slate-200">{entry.title}</span>
-                    <span className="text-slate-400">{formatTime(entry.duration)} · ~{Math.round(entry.bpm)} BPM</span>
+                    <span className="font-semibold text-slate-100">{entry.title}</span>
+                    <span className="text-slate-300">{formatTime(entry.duration)} · ~{Math.round(entry.bpm)} BPM</span>
                   </span>
                   <span
                     className={classNames(
@@ -952,23 +1058,23 @@ export function App() {
   const renderScoreboardCard = (className?: string) => (
     <div
       className={classNames(
-        'w-full space-y-1 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 shadow-lg ring-1 ring-white/10',
+        'w-full space-y-1 rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel ring-1 ring-white/10 backdrop-blur',
         className,
       )}
     >
-      <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Seed</p>
-      <p className="font-mono text-lg font-semibold text-cyan-100">{hud.seed}</p>
-      <div className="grid grid-cols-3 gap-3 pt-2 text-sm text-slate-300 sm:text-base">
+      <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Seed</p>
+      <p className="font-mono text-lg font-semibold text-accent-cyan">{hud.seed}</p>
+      <div className="grid grid-cols-3 gap-3 pt-2 text-sm text-slate-200 sm:text-base">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Score</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Score</p>
           <p className="font-mono text-2xl font-semibold text-slate-50 tabular-nums">{padScore(hud.score)}</p>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Combo</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Combo</p>
           <p className="font-mono text-2xl font-semibold text-slate-50">x{hud.combo}</p>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/60">Best</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/60">Best</p>
           <p className="font-mono text-2xl font-semibold text-slate-50">x{hud.bestCombo}</p>
         </div>
       </div>
@@ -986,21 +1092,21 @@ export function App() {
   const renderRecorderCard = (className?: string) => (
     <div
       className={classNames(
-        'w-full space-y-3 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 shadow-lg ring-1 ring-white/10',
+        'w-full space-y-3 rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel ring-1 ring-white/10 backdrop-blur',
         className,
       )}
     >
-      <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">Recorder</p>
+      <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">Recorder</p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={handleToggleRecording}
           disabled={!recordingSupported}
           className={classNames(
-            'inline-flex flex-1 items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60',
+            'inline-flex flex-1 items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base disabled:cursor-not-allowed disabled:opacity-60',
             recordingState === 'recording'
               ? 'border border-rose-400/60 bg-rose-500/20 text-rose-100 shadow-lg shadow-rose-500/20 hover:bg-rose-500/30'
-              : 'border border-cyan-400/60 bg-cyan-400/15 text-cyan-100 shadow-lg shadow-cyan-500/20 hover:bg-cyan-400/25',
+              : 'border border-accent-cyan/60 bg-accent-cyan/15 text-accent-cyan shadow-glow hover:bg-accent-cyan/25',
           )}
         >
           {recordButtonLabel}
@@ -1009,29 +1115,29 @@ export function App() {
           type="button"
           onClick={handleSaveClip}
           disabled={saveDisabled}
-          className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200/40 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex flex-1 items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition hover:bg-surface-overlay disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
         >
           {isSavingClip ? 'Saving…' : 'Save clip'}
         </button>
       </div>
       <div className="space-y-1">
-        <div className="relative h-1.5 overflow-hidden rounded-full bg-slate-800/60">
+        <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-overlay/70">
           <div
             data-testid="recorder-progress-fill"
-            className="absolute inset-y-0 left-0 bg-cyan-400/80 transition-all"
+            className="absolute inset-y-0 left-0 bg-accent-cyan/80 transition-all"
             style={{
               width: `${Math.round(bufferRatio * 100)}%`,
               transition: prefersReducedMotion ? 'none' : undefined,
             }}
           />
         </div>
-        <div className="flex items-center justify-between text-[0.7rem] text-slate-400">
+        <div className="flex items-center justify-between text-[0.7rem] text-slate-300">
           <span>{bufferedLabel}s buffered</span>
           <span>{bufferLimitLabel}s max</span>
         </div>
       </div>
       <div className="space-y-1 text-[0.7rem]">
-        <p className="text-slate-400">{recordingStatus}</p>
+        <p className="text-slate-300">{recordingStatus}</p>
         {recordingError ? <p className="text-rose-300">{recordingError}</p> : null}
       </div>
     </div>
@@ -1048,21 +1154,21 @@ export function App() {
         type="button"
         onClick={handlePauseRun}
         disabled={hud.status !== 'running'}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
       >
         Pause run
       </button>
       <button
         type="button"
         onClick={handleRestart}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/20"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-accent-cyan/60 bg-accent-cyan/15 px-4 py-2 text-sm font-semibold text-accent-cyan shadow-glow transition hover:bg-accent-cyan/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
       >
         Restart run
       </button>
       <button
         type="button"
         onClick={handleNewSeed}
-        className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200/30 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-border-subtle bg-surface-overlay/70 px-4 py-2 text-sm font-semibold text-slate-100 shadow-panel transition hover:bg-surface-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
       >
         New seed
       </button>
@@ -1071,8 +1177,8 @@ export function App() {
 
   const heroHeader = (
     <header className="flex flex-col gap-3 text-pretty text-center md:text-left">
-      <p className="text-xs font-semibold uppercase tracking-[0.4em] text-cyan-300/80">the path · reactive beat runner</p>
-      <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
+      <p className="text-xs font-semibold uppercase tracking-[0.4em] text-accent-cyan/80">the path · reactive beat runner</p>
+      <h1 className="text-balance text-4xl font-semibold tracking-tight text-slate-50 sm:text-5xl">
         Calibrate the route through rhythm-synced obstacles
       </h1>
       <p className="text-base text-slate-300 sm:text-lg">
@@ -1084,7 +1190,7 @@ export function App() {
 
   const canvasSection = (
     <section
-      className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10"
+      className="relative w-full overflow-hidden rounded-3xl border border-border-strong bg-surface-raised/80 shadow-panel ring-1 ring-white/10 backdrop-blur"
     >
       <canvas
         ref={canvasRef}
@@ -1104,32 +1210,40 @@ export function App() {
               {renderRecorderCard('pointer-events-auto w-full max-w-xs sm:w-64')}
               {renderRunActions('pointer-events-auto')}
             </div>
-            <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-slate-900/50 px-4 py-3 text-xs text-slate-300 ring-1 ring-white/10 sm:justify-between sm:text-sm">
+            <div className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-2xl bg-surface-overlay/70 px-4 py-3 text-xs text-slate-200 ring-1 ring-white/10 sm:justify-between sm:text-sm">
               <StatusMarquee
                 message={statusMessage}
                 prefersReducedMotion={prefersReducedMotion}
-                className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-left text-xs text-slate-200 sm:flex-1"
+                className="w-full rounded-xl border border-border-subtle bg-surface-raised/80 px-3 py-2 text-left text-xs text-slate-100 sm:flex-1"
                 innerClassName="gap-12"
               />
-              <p className="font-mono text-[0.8rem] text-slate-400 sm:text-xs">
+              <p className="font-mono text-[0.8rem] text-slate-300 sm:text-xs">
                 Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
               </p>
             </div>
           </>
         ) : null}
       </div>
+      <CanvasDiagnosticsOverlay
+        metrics={canvasMetrics}
+        profile={deviceProfile}
+        fps={performanceSample.fps}
+        frameTime={performanceSample.frameTime}
+        className="absolute bottom-3 left-3"
+        hidden={!worldReady}
+      />
       {showStartOverlay ? (
-        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-slate-950/60 px-6 py-8 text-center backdrop-blur-sm">
+        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-surface-overlay/90 px-6 py-8 text-center backdrop-blur-sm">
           <button
             type="button"
             onClick={handleStartRun}
             data-testid="start-overlay"
-            className="flex w-full max-w-md flex-col items-center gap-3 rounded-3xl border border-cyan-400/50 bg-slate-900/80 px-6 py-8 text-center text-slate-100 shadow-2xl shadow-cyan-500/20 transition hover:bg-slate-900/70 focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950"
+            className="flex w-full max-w-md flex-col items-center gap-3 rounded-3xl border border-accent-cyan/60 bg-surface-raised/90 px-6 py-8 text-center text-slate-100 shadow-panel transition hover:bg-surface-raised focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface-base"
           >
-            <span className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">{isPaused ? 'Paused' : 'Ready'}</span>
+            <span className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">{isPaused ? 'Paused' : 'Ready'}</span>
             <span className="text-2xl font-semibold text-slate-50 sm:text-3xl">{startOverlayPrimary}</span>
-            <span className="text-sm text-slate-300 sm:text-base">{startOverlaySecondary}</span>
-            <span className="text-xs text-slate-500">{startOverlayHint}</span>
+            <span className="text-sm text-slate-200 sm:text-base">{startOverlaySecondary}</span>
+            <span className="text-xs text-slate-400">{startOverlayHint}</span>
           </button>
         </div>
       ) : null}
@@ -1165,22 +1279,28 @@ export function App() {
       {telemetryItems.map((item) => (
         <div
           key={item.key}
-          className="min-w-[160px] rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 shadow-lg sm:min-w-0"
+          className="min-w-[160px] rounded-2xl border border-border-subtle bg-surface-raised/80 px-4 py-3 shadow-panel sm:min-w-0"
         >
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/80">{item.label}</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-accent-cyan/80">{item.label}</p>
           <p className="font-mono text-lg font-semibold text-slate-50">{item.value}</p>
-          <p className="text-xs text-slate-400">{item.description}</p>
+          <p className="text-xs text-slate-300">{item.description}</p>
         </div>
       ))}
     </div>
   )
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+
+    <div className="min-h-screen bg-surface-base text-slate-100">
       <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
         {isDesktop ? (
+
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 pb-20 pt-10 sm:gap-10 sm:px-6 sm:pb-24 sm:pt-12">
+        {isTabletOrLarger ? (
+
           <div className="grid gap-10 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-            <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-xl ring-1 ring-white/10">
+            <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
               {renderTrackControls(true)}
             </section>
             <div className="flex flex-col gap-10">
@@ -1193,19 +1313,19 @@ export function App() {
           <div className="flex flex-col gap-8">
             <div className="space-y-4">
               {canvasSection}
-              <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 shadow-xl ring-1 ring-white/10">
+              <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-4 shadow-panel ring-1 ring-white/10 backdrop-blur">
                 {renderRunActions('w-full', 'row')}
               </section>
             </div>
             <div className="space-y-6">
               {heroHeader}
-              <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-xl ring-1 ring-white/10">
+              <section className="rounded-3xl border border-border-strong bg-surface-raised/80 p-5 shadow-panel ring-1 ring-white/10 backdrop-blur">
                 {renderTrackSummary()}
               </section>
               <StatusMarquee
                 message={statusMessage}
                 prefersReducedMotion={prefersReducedMotion}
-                className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-xs text-cyan-100 shadow-inner"
+                className="rounded-full border border-accent-cyan/50 bg-accent-cyan/15 px-4 py-2 text-xs text-accent-cyan shadow-glow"
               />
               {telemetryChips}
             </div>
@@ -1213,7 +1333,7 @@ export function App() {
           </div>
         )}
       </main>
-      {!isDesktop ? (
+      {!isTabletOrLarger ? (
         <>
           <button
             type="button"
@@ -1222,9 +1342,13 @@ export function App() {
             aria-controls="mobile-controls"
             onClick={() => setSheetOpen(true)}
             className={classNames(
-              'fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-cyan-400 text-slate-950 shadow-2xl transition md:hidden focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-slate-950',
+              'fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent-cyan text-slate-950 shadow-glow transition hover:bg-accent-cyan/90 md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base',
               isSheetOpen && 'translate-y-12 opacity-0 pointer-events-none',
             )}
+            style={{
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+              right: 'calc(env(safe-area-inset-right, 0px) + 1.5rem)',
+            }}
           >
             <svg
               viewBox="0 0 24 24"
@@ -1260,10 +1384,10 @@ export function App() {
               <StatusMarquee
                 message={statusMessage}
                 prefersReducedMotion={prefersReducedMotion}
-                className="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-2 text-xs text-slate-200"
+                className="rounded-2xl border border-border-subtle bg-surface-raised/90 px-4 py-2 text-xs text-slate-100"
                 innerClassName="gap-12"
               />
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-300">
                 Fixed timestep · deterministic PRNG · Beat generator BPM {selectedTrack?.bpm ?? 108}
               </p>
               {renderTrackControls(false)}

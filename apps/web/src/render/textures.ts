@@ -13,8 +13,10 @@ type TextureRecord = {
   promise?: Promise<HTMLImageElement>
 }
 
+type PatternRepetition = 'repeat' | 'repeat-x' | 'repeat-y' | 'no-repeat'
+
 type PatternOptions = {
-  repetition?: CanvasPatternRepetition
+  repetition?: PatternRepetition
 }
 
 const manifest = JSON.parse(manifestSource) as Record<string, TextureInfo>
