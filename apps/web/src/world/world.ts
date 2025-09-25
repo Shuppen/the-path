@@ -130,47 +130,44 @@ export class World {
     this.setPointer(input.pointer)
     this.advanceFlashes(input.dt)
 
-    if (input.restart) {
+    const startRequested = input.start ?? true
+    const jumpRequested = input.jump ?? false
+    const pauseRequested = input.pause ?? false
+    const restartRequested = input.restart ?? false
 
+    if (restartRequested) {
       input.onRunRestart?.({ reason: 'manual', seed: this.baseSeed })
-
-      this.pendingReset = true
-
       this.reset(this.baseSeed)
+      this.pendingReset = true
+      this.state.status = 'running'
       return
     }
-
 
     const currentStatus = this.state.status
 
     if (currentStatus === 'gameover') {
-    if (this.state.status === 'gameover') {
-
-      if (input.jump) {
+      if (jumpRequested || startRequested || restartRequested) {
         input.onRunRestart?.({ reason: 'gameover', seed: this.baseSeed })
-
-      if (input.jump || input.restart) {
-        this.pendingReset = true
-
         this.reset(this.baseSeed)
+        this.pendingReset = true
+        this.state.status = 'running'
       }
       return
     }
 
     if (currentStatus === 'menu') {
-      if (!input.start) {
-        return
+      if (startRequested || jumpRequested) {
+        this.state.status = 'running'
       }
-      this.state.status = 'running'
     } else if (currentStatus === 'paused') {
-      if (input.start) {
+      if (startRequested || jumpRequested) {
         this.state.status = 'running'
       } else {
         return
       }
     }
 
-    if (input.pause && this.state.status === 'running') {
+    if (pauseRequested && this.state.status === 'running') {
       this.state.status = 'paused'
       return
     }
@@ -185,7 +182,7 @@ export class World {
     }
 
     const playerResult = updatePlayer(this.state.player, {
-      jumpRequested: input.jump,
+      jumpRequested,
       jumpHoldDuration: input.jumpHoldDuration,
       stage: this.state.stage,
       dt: input.dt,
