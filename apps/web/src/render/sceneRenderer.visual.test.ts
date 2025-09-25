@@ -135,6 +135,7 @@ const createState = (): WorldState => {
     runner: {
       lane: 1,
       targetLane: 2,
+      position: 1.4,
       transitionFrom: 1,
       transitionStart: 42.2,
       transitionDuration: 0.15,

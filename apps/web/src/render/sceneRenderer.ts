@@ -155,15 +155,18 @@ export class SceneRenderer {
 
   private drawRunner(state: WorldState): void {
     const { stage, runner } = state
-    const elapsed = this.prefersReducedMotion ? runner.transitionDuration : state.time - runner.transitionStart
-    let progress = runner.transitionDuration > 0 ? clamp01(elapsed / Math.max(0.0001, runner.transitionDuration)) : 1
-    if (!this.prefersReducedMotion && runner.transitionDuration > 0) {
-      progress = easeInOutCubic(progress)
-    }
 
-    const fromLane = runner.transitionDuration > 0 ? runner.transitionFrom : runner.targetLane
+    const elapsed = Math.max(0, state.time - runner.transitionStart)
+    const hasTransition = runner.transitionDuration > 0
+    const linearProgress = hasTransition ? clamp01(elapsed / Math.max(0.0001, runner.transitionDuration)) : 1
+    const easedProgress = !this.prefersReducedMotion && hasTransition ? easeInOutCubic(linearProgress) : linearProgress
+
+    const fromLane = hasTransition ? runner.transitionFrom : runner.targetLane
     const toLane = runner.targetLane
-    const lanePosition = fromLane + (toLane - fromLane) * progress
+    const lanePosition = hasTransition
+      ? fromLane + (toLane - fromLane) * easedProgress
+      : runner.position ?? toLane
+
     const x = stage.lanePadding + stage.laneWidth * lanePosition + stage.laneWidth * 0.5
     const y = stage.hitLineY - stage.laneWidth * 0.25
 

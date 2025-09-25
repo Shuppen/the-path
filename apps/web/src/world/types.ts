@@ -34,7 +34,10 @@ export interface NoteFeedback {
 export interface RunnerState {
   lane: LaneIndex
   targetLane: LaneIndex
-  transitionFrom: LaneIndex
+
+  position: number
+  transitionFrom: number
+
   transitionStart: number
   transitionDuration: number
   combo: number
