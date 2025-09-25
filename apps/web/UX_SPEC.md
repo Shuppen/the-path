@@ -52,6 +52,12 @@ This document expands on the README to describe the responsive behaviour the fro
 - Defer non-essential telemetry rendering until after first interaction on `xs`/`sm`.
 - Respect `prefers-reduced-motion`; disable marquee + parallax in that mode.
 
+## Visual language
+
+- Global background blends a deep slate base (`surface.base`) with cyan and violet mesh gradients. Panels use `surface.raised` with translucent overlays and a `panel` drop shadow to lift above the playfield without sacrificing contrast.
+- Accent cyan drives primary actions (`accent.cyan`), supported by magenta highlights in secondary badges. Ensure text on accent surfaces remains `text-slate-950`/`text-slate-100` for ≥ 4.5:1 contrast.
+- Cards, telemetry chips, and dialogs share the same 24 px radius treatment, `border.border-subtle`, and `focus` ring token for consistent accessibility cues across input states.
+
 ## Audio track loading UX flow
 
 1. Surface a primary button labelled «Загрузить трек» within the control surface (toolbar on desktop, bottom sheet on mobile). Activating it opens the system file picker pre-filtered to OGG/MP3/WAV extensions. Mirror this affordance with a drag-and-drop target covering the canvas so users can drop files directly.
