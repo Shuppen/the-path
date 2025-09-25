@@ -339,23 +339,6 @@ export function App() {
     })
   }, [])
 
-  const resetAudioTimeline = useCallback(() => {
-    const audio = audioRef.current
-    if (!audio || !audio.isSupported()) return
-    const state = audio.getState()
-    if (state === 'idle' || state === 'loading') {
-      audio.setCurrentTime(0)
-      return
-    }
-    const shouldResume = state === 'playing'
-    audio.stop()
-    if (shouldResume) {
-      audio.play().catch((error) => {
-        console.error(error)
-      })
-    }
-  }, [])
-
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
@@ -534,8 +517,6 @@ export function App() {
           dt,
           onRunRestart: handleRunRestart,
         })
-
-        world.update({ ...snapshot, dt })
         if (world.consumePendingReset()) {
           resetAudioTimeline()
         }
@@ -1056,27 +1037,32 @@ export function App() {
     </div>
   )
 
-  const renderRunActions = (className?: string) => (
-    <div className={classNames('flex flex-col gap-2 sm:flex-row', className)}>
+  const renderRunActions = (className?: string, orientation: 'column' | 'row' = 'column') => (
+    <div
+      className={classNames(
+        orientation === 'row' ? 'flex flex-row flex-wrap gap-2' : 'flex flex-col gap-2 sm:flex-row',
+        className,
+      )}
+    >
       <button
         type="button"
         onClick={handlePauseRun}
         disabled={hud.status !== 'running'}
-        className="inline-flex items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
       >
         Pause run
       </button>
       <button
         type="button"
         onClick={handleRestart}
-        className="inline-flex items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/20"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400/20"
       >
         Restart run
       </button>
       <button
         type="button"
         onClick={handleNewSeed}
-        className="inline-flex items-center justify-center rounded-full border border-slate-200/30 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20"
+        className="inline-flex flex-1 items-center justify-center rounded-full border border-slate-200/30 bg-white/10 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg shadow-slate-900/40 transition hover:bg-white/20"
       >
         New seed
       </button>
@@ -1097,26 +1083,17 @@ export function App() {
   )
 
   const canvasSection = (
-
     <section
-      className={classNames(
-        'relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10',
-        'aspect-hero-video sm:aspect-hero-video-wide'
-      )}
+      className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10"
     >
       <canvas
         ref={canvasRef}
         className="block w-full cursor-crosshair bg-transparent"
         role="presentation"
-        style={canvasAspectStyle}
-
-    <section className="relative w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 shadow-2xl ring-1 ring-white/10">
-      <canvas
-        ref={canvasRef}
-        className="h-[380px] w-full cursor-crosshair bg-transparent sm:h-[460px]"
-        style={{ touchAction: 'none' }}
-        aria-label="Gameplay canvas. Use touch gestures to guide the runner."
-
+        style={{
+          ...canvasAspectStyle,
+          touchAction: 'none',
+        }}
       />
       <div className="pointer-events-none absolute inset-0 hidden flex-col justify-between p-5 md:flex">
         {showHudPanels ? (
@@ -1214,7 +1191,12 @@ export function App() {
           </div>
         ) : (
           <div className="flex flex-col gap-8">
-            {canvasSection}
+            <div className="space-y-4">
+              {canvasSection}
+              <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 shadow-xl ring-1 ring-white/10">
+                {renderRunActions('w-full', 'row')}
+              </section>
+            </div>
             <div className="space-y-6">
               {heroHeader}
               <section className="rounded-3xl border border-white/10 bg-slate-900/50 p-5 shadow-xl ring-1 ring-white/10">
