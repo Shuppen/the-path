@@ -136,3 +136,9 @@ export interface WorldSnapshot {
   }
   meta: MetaProgressState
 }
+
+export type WorldAudioEvent =
+  | { type: 'hit'; judgement: Judgement; lane: LaneIndex; time: number; combo: number }
+  | { type: 'miss'; lane: LaneIndex; time: number }
+  | { type: 'fever'; state: 'start' | 'end'; time: number }
+  | { type: 'lane-shift'; direction: 'left' | 'right'; lane: LaneIndex; time: number }

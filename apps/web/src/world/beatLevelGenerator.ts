@@ -27,6 +27,7 @@ export class BeatLevelGenerator {
   private obstacleCooldown = 0
   private tempoAdjustment = 0
   private lastExternalBeat: number | null = null
+  private useExternalClock = false
 
   constructor(
     private readonly prng: Prng,
@@ -48,6 +49,7 @@ export class BeatLevelGenerator {
     this.tempoAdjustment = 0
     this.lastExternalBeat = null
     this.obstacleCooldown = 0
+    this.useExternalClock = false
   }
 
   update(world: WorldState, leadTime: number = NOTE_PRELOAD_TIME): void {
@@ -59,7 +61,7 @@ export class BeatLevelGenerator {
 
     while (this.nextBeatTime <= targetTime) {
       const note = this.createNote(this.nextBeatTime)
-      world.notes.push(note)
+      this.insertNote(world, note)
       this.maybeSpawnObstacle(world, this.nextBeatTime)
       this.nextBeatTime += this.beatInterval
       this.beatIndex += 1
@@ -146,7 +148,7 @@ export class BeatLevelGenerator {
     this.beatInterval = clamp(this.baseBeatInterval / ramp, 0.15, 1.2)
   }
 
-  syncToExternalBeat(time: number, confidence = 1): void {
+  syncToExternalBeat(time: number, confidence = 1, world?: WorldState, quantizedTime?: number): void {
     if (!Number.isFinite(time)) return
     const normalizedConfidence = clamp(confidence, 0.1, 3)
 
@@ -168,6 +170,12 @@ export class BeatLevelGenerator {
     if (Number.isFinite(approxIndex) && approxIndex > this.beatIndex) {
       this.beatIndex = approxIndex
     }
+
+    if (world) {
+      this.useExternalClock = true
+      const target = Number.isFinite(quantizedTime) ? (quantizedTime as number) : time
+      this.spawnExternalBeat(world, target)
+    }
   }
 
   applyEnergySpike(intensity: number): void {
@@ -182,5 +190,32 @@ export class BeatLevelGenerator {
 
   getBeatIndex(): number {
     return this.beatIndex
+  }
+
+  private insertNote(world: WorldState, note: LaneNote): void {
+    const existing = world.notes.find(
+      (candidate) =>
+        !candidate.judged &&
+        candidate.lane === note.lane &&
+        Math.abs(candidate.time - note.time) <= Math.max(this.beatInterval * 0.3, 0.12),
+    )
+    if (existing) {
+      return
+    }
+
+    const index = world.notes.findIndex((candidate) => candidate.time > note.time)
+    if (index === -1) {
+      world.notes.push(note)
+    } else {
+      world.notes.splice(index, 0, note)
+    }
+  }
+
+  private spawnExternalBeat(world: WorldState, targetTime: number): void {
+    const clamped = Math.max(targetTime, world.time)
+    const note = this.createNote(clamped)
+    note.time = clamped
+    this.insertNote(world, note)
+    this.nextBeatTime = clamped + this.beatInterval
   }
 }

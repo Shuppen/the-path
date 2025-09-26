@@ -7,6 +7,7 @@ export interface StoredRecentTrack {
   duration: number
   bpm: number
   createdAt: number
+  peaks?: number[]
 }
 
 export const RECENT_TRACKS_STORAGE_KEY = 'the-path:recent-tracks'
@@ -25,6 +26,9 @@ const getStorage = (storage?: Storage): Storage | null => {
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value)
 
+const isValidPeaks = (value: unknown): value is number[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+
 const isValidRecord = (value: unknown): value is StoredRecentTrack => {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Partial<StoredRecentTrack>
@@ -34,7 +38,8 @@ const isValidRecord = (value: unknown): value is StoredRecentTrack => {
     typeof record.artist === 'string' &&
     isFiniteNumber(record.duration) &&
     isFiniteNumber(record.bpm) &&
-    isFiniteNumber(record.createdAt)
+    isFiniteNumber(record.createdAt) &&
+    (record.peaks === undefined || isValidPeaks(record.peaks))
   )
 }
 
@@ -83,4 +88,5 @@ export const toManifest = (entry: StoredRecentTrack): AudioTrackManifestEntry =>
   artist: entry.artist,
   duration: entry.duration,
   bpm: entry.bpm,
+  peaks: entry.peaks,
 })

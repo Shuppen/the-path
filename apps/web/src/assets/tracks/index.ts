@@ -15,6 +15,7 @@ export interface AudioTrackManifestEntry {
   duration: number
   bpm: number
   description?: string
+  peaks?: number[]
 }
 
 const SUPPORTED_EXTENSIONS = ['aac', 'flac', 'm4a', 'mp3', 'ogg', 'opus', 'wav', 'webm'] as const
