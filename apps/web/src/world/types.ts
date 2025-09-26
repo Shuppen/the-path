@@ -88,11 +88,25 @@ export interface RunnerState {
   damageBonus: number
 }
 
+export interface BattlePassState {
+  seasonId: string
+  xp: number
+  premiumUnlocked: boolean
+  freeClaimed: string[]
+  premiumClaimed: string[]
+  expiresAt: number
+}
+
 export interface MetaProgressState {
   xp: number
   level: number
+  coins: number
   unlockedTracks: string[]
   unlockedSkins: string[]
+  ownedThemes: string[]
+  ownedEffects: string[]
+  starterPackPurchased: boolean
+  battlePass: BattlePassState
 }
 
 export interface WorldState {

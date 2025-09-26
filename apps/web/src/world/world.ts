@@ -45,6 +45,7 @@ import {
   type WorldSnapshot,
   type WorldState,
   type WorldStatus,
+  type BattlePassState,
 } from './types'
 import { readPersonalBest, updatePersonalBest, type PersonalBestRecord } from './personalBest'
 
@@ -71,11 +72,25 @@ const computeMultiplier = (combo: number): number => {
 
 const BASE_CALIBRATION: CalibrationSettings = { inputOffsetMs: 0, audioOffsetMs: 0 }
 
+const DEFAULT_BATTLE_PASS: BattlePassState = {
+  seasonId: 'synth-season-1',
+  xp: 0,
+  premiumUnlocked: false,
+  freeClaimed: [],
+  premiumClaimed: [],
+  expiresAt: 0,
+}
+
 const DEFAULT_META: MetaProgressState = {
   xp: 0,
   level: 1,
+  coins: 0,
   unlockedTracks: [],
   unlockedSkins: [],
+  ownedThemes: ['default-night'],
+  ownedEffects: ['classic-trail'],
+  starterPackPurchased: false,
+  battlePass: DEFAULT_BATTLE_PASS,
 }
 
 const UPGRADE_LIBRARY: UpgradeCard[] = [
@@ -195,12 +210,20 @@ const gainMetaXp = (meta: MetaProgressState, xp: number): MetaProgressState => {
   if (level >= 4) unlockedTracks.add('void-drift')
   if (level >= 3) unlockedSkins.add('neon-blade')
   if (level >= 5) unlockedSkins.add('aurora-shield')
+  const earnedCoins = Math.max(5, Math.round(xp * 1.25))
+  const battlePassXp = Math.max(0, xp)
+  const nextBattlePass: BattlePassState = {
+    ...meta.battlePass,
+    xp: meta.battlePass.xp + battlePassXp,
+  }
   return {
     ...meta,
     xp: totalXp,
     level,
     unlockedTracks: Array.from(unlockedTracks),
     unlockedSkins: Array.from(unlockedSkins),
+    coins: meta.coins + earnedCoins,
+    battlePass: nextBattlePass,
   }
 }
 

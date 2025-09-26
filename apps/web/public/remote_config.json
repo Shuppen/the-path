@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "ads": {
+    "placements": {
+      "second_chance": { "frequencyPerHour": 2, "cooldownMinutes": 20 },
+      "unlock_track_session": { "frequencyPerHour": 4, "cooldownMinutes": 10 },
+      "currency_boost": { "frequencyPerHour": 6, "cooldownMinutes": 5 }
+    },
+    "rewardAmounts": {
+      "currencyBoost": 150
+    }
+  },
+  "store": {
+    "prices": {
+      "skin": 700,
+      "effect": 550,
+      "theme": 450,
+      "trackPack": 1100
+    },
+    "starterPack": {
+      "price": 3.99,
+      "discountPercent": 35,
+      "grantsCoins": 1500
+    }
+  },
+  "missions": {
+    "dailyGoal": 3,
+    "weeklyGoal": 14,
+    "dailyRewardCoins": 200,
+    "weeklyRewardCoins": 600
+  }
+}

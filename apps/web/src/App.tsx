@@ -33,8 +33,42 @@ import SongSelectScreen from './screens/SongSelect'
 import GameScreen from './screens/Game'
 import ResultsScreen from './screens/Results'
 import SettingsScreen from './screens/Settings'
+import StoreScreen from './screens/Store'
+import BattlePassScreen from './screens/BattlePass'
+import EventsScreen from './screens/Events'
+import ShareScreen from './screens/Share'
+import ReplayClipExporter from './share/ReplayClipExporter'
+import { createAnalytics } from './services/analytics'
+import {
+  getRemoteConfig,
+  loadRemoteConfig,
+  type RemoteConfig,
+  type RewardedAdPlacement,
+} from './services/remoteConfig'
+import { createRewardedAdService } from './services/ads'
+import {
+  getBattlePassRewards,
+  claimBattlePassReward,
+  unlockPremiumBattlePass,
+  syncBattlePassWithConfig,
+} from './liveops/battlePass'
+import {
+  getChallengeState,
+  recordChallengeProgress,
+  markChallengeClaimed,
+  type ChallengeState,
+} from './liveops/challenges'
 
-type Screen = 'home' | 'song-select' | 'game' | 'results' | 'settings'
+type Screen =
+  | 'home'
+  | 'song-select'
+  | 'game'
+  | 'results'
+  | 'settings'
+  | 'store'
+  | 'battle-pass'
+  | 'events'
+  | 'share'
 
 interface GameResult {
   track: AudioTrackManifestEntry
@@ -65,6 +99,8 @@ const describeUploadedTrack = (duration: number, bpm: number): string => {
   const roundedBpm = Math.round(bpm)
   return `User uploaded · ${formatTime(duration)} · ~${roundedBpm} BPM`
 }
+
+const PREMIUM_UNLOCK_COST = 1200
 
 interface StatusMarqueeProps {
   message: string
@@ -162,6 +198,20 @@ export function App() {
   const [worldMode, setWorldMode] = useState<WorldMode>('track')
   const [metaProgress, setMetaProgress] = useState<MetaProgressState>(() => readMetaProgress())
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => readAudioSettings())
+  const analytics = useRef(createAnalytics()).current
+  const [remoteConfig, setRemoteConfig] = useState<RemoteConfig>(() => getRemoteConfig())
+  const adServiceRef = useRef(createRewardedAdService())
+  const adService = adServiceRef.current
+  const [dailyChallenge, setDailyChallenge] = useState<ChallengeState>(() => getChallengeState('daily', remoteConfig))
+  const [weeklyChallenge, setWeeklyChallenge] = useState<ChallengeState>(() => getChallengeState('weekly', remoteConfig))
+  const [shareExporter, setShareExporter] = useState<ReplayClipExporter | null>(null)
+  const [shareHistory, setShareHistory] = useState<Array<{ presetId: string; url: string; createdAt: number }>>([])
+  const [shareStatusMessage, setShareStatusMessage] = useState<string | null>(null)
+  const [adStatus, setAdStatus] = useState<string | null>(null)
+  const [storeMessage, setStoreMessage] = useState<string | null>(null)
+  const [battlePassMessage, setBattlePassMessage] = useState<string | null>(null)
+  const [eventsMessage, setEventsMessage] = useState<string | null>(null)
+  const [sessionUnlocks, setSessionUnlocks] = useState<string[]>([])
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
@@ -204,6 +254,55 @@ export function App() {
     writeMetaProgress(metaProgress)
   }, [metaProgress])
 
+  useEffect(() => {
+    if (typeof process !== 'undefined' && process.env?.VITEST) {
+      return undefined
+    }
+
+    let active = true
+    loadRemoteConfig()
+      .then((config) => {
+        if (!active) return
+        setRemoteConfig((previous) => (previous === config ? previous : config))
+      })
+      .catch((error) => {
+        console.warn('Failed to load remote config:', error)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    analytics.startSession()
+    return () => {
+      analytics.endSession()
+    }
+  }, [analytics])
+
+  const shareHistoryRef = useRef(shareHistory)
+  useEffect(() => {
+    shareHistoryRef.current = shareHistory
+  }, [shareHistory])
+
+  useEffect(() => {
+    return () => {
+      shareHistoryRef.current.forEach((entry) => {
+        if (entry.url && typeof URL !== 'undefined') {
+          URL.revokeObjectURL(entry.url)
+        }
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (screen !== 'store') setStoreMessage(null)
+    if (screen !== 'battle-pass') setBattlePassMessage(null)
+    if (screen !== 'events') setEventsMessage(null)
+    if (screen !== 'share') setShareStatusMessage(null)
+    if (screen !== 'results') setAdStatus(null)
+  }, [screen])
+
   const resolveTrackById = useCallback(
     (id: string): AudioTrackManifestEntry | undefined =>
       uploadedTracks.find((track) => track.id === id) ?? getTrackById(id) ?? uploadedTracks[0] ?? TRACK_MANIFEST[0],
@@ -212,6 +311,31 @@ export function App() {
 
   const selectedTrack = useMemo(() => resolveTrackById(selectedTrackId), [resolveTrackById, selectedTrackId])
   const eqPresets = useMemo(() => audio.listEqPresets(), [audio])
+  const shareLink = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.origin
+    }
+    return 'https://play-the-path.web'
+  }, [])
+
+  const updateMetaProgress = useCallback(
+    (updater: MetaProgressState | ((prev: MetaProgressState) => MetaProgressState)) => {
+      setMetaProgress((previous) => {
+        const next =
+          typeof updater === 'function'
+            ? (updater as (value: MetaProgressState) => MetaProgressState)(previous)
+            : updater
+        return syncBattlePassWithConfig(next, remoteConfig)
+      })
+    },
+    [remoteConfig],
+  )
+
+  useEffect(() => {
+    updateMetaProgress((previous) => previous)
+    setDailyChallenge(getChallengeState('daily', remoteConfig))
+    setWeeklyChallenge(getChallengeState('weekly', remoteConfig))
+  }, [remoteConfig, updateMetaProgress])
 
   useEffect(() => {
     if (!selectedTrack) {
@@ -225,20 +349,27 @@ export function App() {
 
   const handleStartGame = useCallback(() => {
     if (!selectedTrack) return
+    analytics.trackLevelStart(selectedTrack.id, worldMode)
     setGameResult(null)
+    setAdStatus(null)
     setScreen('game')
-  }, [selectedTrack])
+  }, [analytics, selectedTrack, worldMode])
 
   const handleShowResults = useCallback(
     (snapshot: WorldSnapshot) => {
       if (!selectedTrack) return
+      const outcome = snapshot.status === 'gameover' && snapshot.health <= 0 ? 'fail' : snapshot.health > 0 ? 'success' : 'fail'
+      analytics.trackLevelEnd(selectedTrack.id, worldMode, outcome, snapshot.score, snapshot.accuracy)
       setSelectedTrackId(selectedTrack.id)
       setGameResult({ track: selectedTrack, snapshot })
       setLastTrackId(selectedTrack.id)
-      setMetaProgress(snapshot.meta)
+      updateMetaProgress(snapshot.meta)
+      setDailyChallenge(recordChallengeProgress('daily', 1, remoteConfig))
+      const weeklyDelta = Math.max(1, Math.round(snapshot.score / 10000))
+      setWeeklyChallenge(recordChallengeProgress('weekly', weeklyDelta, remoteConfig))
       setScreen('results')
     },
-    [selectedTrack],
+    [analytics, remoteConfig, selectedTrack, updateMetaProgress, worldMode],
   )
 
   const handleExitGame = useCallback(
@@ -247,15 +378,12 @@ export function App() {
         setLastTrackId(selectedTrack.id)
       }
       if (snapshot && selectedTrack) {
-        setSelectedTrackId(selectedTrack.id)
-        setGameResult({ track: selectedTrack, snapshot })
-        setMetaProgress(snapshot.meta)
-        setScreen('results')
+        handleShowResults(snapshot)
         return
       }
       setScreen('home')
     },
-    [selectedTrack],
+    [handleShowResults, selectedTrack],
   )
 
   const handleAudioSettingsChange = useCallback((next: AudioSettings) => {
@@ -348,6 +476,208 @@ export function App() {
     [audio, audioSupported],
   )
 
+  const handleStoreCommit = useCallback(
+    (
+      nextMeta: MetaProgressState,
+      payload: { description: string; sku: string; price?: number; currency?: string; kind: 'soft' | 'real' },
+    ) => {
+      updateMetaProgress(nextMeta)
+      setStoreMessage(payload.description)
+      analytics.trackPurchase({
+        sku: payload.sku,
+        price: payload.price ?? 0,
+        currency: payload.currency ?? (payload.kind === 'soft' ? 'soft' : 'USD'),
+        kind: payload.kind,
+        meta: { description: payload.description },
+      })
+    },
+    [analytics, updateMetaProgress],
+  )
+
+  const handleStoreError = useCallback((message: string) => {
+    setStoreMessage(message)
+  }, [])
+
+  const handleRecorderReady = useCallback((exporter: ReplayClipExporter | null) => {
+    setShareExporter(exporter)
+    if (!exporter) {
+      setShareStatusMessage(null)
+    }
+  }, [])
+
+  const handleShareExport = useCallback(
+    async (presetId: string) => {
+      if (!shareExporter) {
+        setShareStatusMessage('Запись недоступна в этой сессии.')
+        return
+      }
+      try {
+        const result = await shareExporter.exportClip(presetId)
+        if (!result) {
+          setShareStatusMessage('Не удалось получить клип.')
+          return
+        }
+        const url = result.url ?? (typeof URL !== 'undefined' ? URL.createObjectURL(result.blob) : '')
+        setShareHistory((previous) => {
+          const entry = { presetId: result.preset.id, url, createdAt: Date.now() }
+          const combined = [entry, ...previous]
+          const limited = combined.slice(0, 5)
+          combined.slice(5).forEach((item) => {
+            if (item.url && typeof URL !== 'undefined') {
+              URL.revokeObjectURL(item.url)
+            }
+          })
+          return limited
+        })
+        setShareStatusMessage('Клип сохранён — скачайте или поделитесь!')
+        analytics.trackShareExport({
+          presetId: result.preset.id,
+          duration: result.preset.duration,
+          format: result.blob.type || 'video/webm',
+        })
+      } catch (error) {
+        console.warn('Share export failed', error)
+        setShareStatusMessage('Ошибка экспорта клипа. Попробуйте снова.')
+      }
+    },
+    [analytics, shareExporter],
+  )
+
+  const handleCopyShareLink = useCallback(async () => {
+    const target = `${shareLink}?ref=share`
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(target)
+        setShareStatusMessage('Ссылка скопирована в буфер обмена.')
+      } else {
+        setShareStatusMessage(`Скопируйте вручную: ${target}`)
+      }
+    } catch (error) {
+      console.warn('Copy link failed', error)
+      setShareStatusMessage(`Скопируйте вручную: ${target}`)
+    }
+  }, [shareLink])
+
+  const handleCopySeasonLink = useCallback(async () => {
+    const target = `${shareLink}?season=${encodeURIComponent(metaProgress.battlePass.seasonId)}`
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(target)
+        setBattlePassMessage('Ссылка на сезон скопирована!')
+      } else {
+        setBattlePassMessage(`Скопируйте вручную: ${target}`)
+      }
+    } catch (error) {
+      console.warn('Copy season link failed', error)
+      setBattlePassMessage(`Скопируйте вручную: ${target}`)
+    }
+  }, [metaProgress.battlePass.seasonId, shareLink])
+
+  const handleUnlockPremium = useCallback(() => {
+    updateMetaProgress((previous) => {
+      if (previous.battlePass.premiumUnlocked) {
+        setBattlePassMessage('Премиум уже активирован.')
+        return previous
+      }
+      if (previous.coins < PREMIUM_UNLOCK_COST) {
+        setBattlePassMessage(`Нужно ${PREMIUM_UNLOCK_COST} ◈ для премиума.`)
+        return previous
+      }
+      const nextMeta = unlockPremiumBattlePass({
+        ...previous,
+        coins: previous.coins - PREMIUM_UNLOCK_COST,
+      })
+      setBattlePassMessage('Премиум дорожка активирована!')
+      analytics.trackPurchase({
+        sku: 'battle-pass-premium',
+        price: PREMIUM_UNLOCK_COST,
+        currency: 'soft',
+        kind: 'soft',
+        meta: { description: 'Battle Pass premium unlock' },
+      })
+      return nextMeta
+    })
+  }, [analytics, updateMetaProgress])
+
+  const handleClaimBattlePass = useCallback(
+    (rewardId: string) => {
+      updateMetaProgress((previous) => {
+        const result = claimBattlePassReward(previous, rewardId)
+        if (!result.success) {
+          setBattlePassMessage(result.error ?? 'Награда недоступна')
+          return previous
+        }
+        setBattlePassMessage('Награда получена!')
+        return result.updatedMeta
+      })
+    },
+    [updateMetaProgress],
+  )
+
+  const handleClaimChallenge = useCallback(
+    (kind: 'daily' | 'weekly') => {
+      const state = kind === 'daily' ? dailyChallenge : weeklyChallenge
+      if (state.claimed || state.progress < state.goal) {
+        setEventsMessage('Сначала выполните задание целиком.')
+        return
+      }
+      const rewardCoins = kind === 'daily' ? remoteConfig.missions.dailyRewardCoins : remoteConfig.missions.weeklyRewardCoins
+      updateMetaProgress((previous) => ({ ...previous, coins: previous.coins + rewardCoins }))
+      if (kind === 'daily') {
+        setDailyChallenge(markChallengeClaimed('daily', remoteConfig))
+      } else {
+        setWeeklyChallenge(markChallengeClaimed('weekly', remoteConfig))
+      }
+      setEventsMessage(`Получено ${rewardCoins} монет.`)
+    },
+    [dailyChallenge, weeklyChallenge, remoteConfig, updateMetaProgress],
+  )
+
+  const handleWatchAd = useCallback(
+    async (placement: RewardedAdPlacement) => {
+      setAdStatus(null)
+      try {
+        const result = await adService.show(placement)
+        if (result.status !== 'rewarded' || !result.reward) {
+          const message = result.message ?? (result.status === 'capped' ? 'Лимит достигнут. Попробуйте позже.' : 'Реклама недоступна')
+          setAdStatus(message)
+          return
+        }
+        analytics.trackAdReward({ placement, rewardType: result.reward.type, value: result.reward.amount })
+        switch (placement) {
+          case 'second_chance': {
+            setAdStatus('Вторая жизнь активирована!')
+            handleStartGame()
+            break
+          }
+          case 'unlock_track_session': {
+            const pool = TRACK_MANIFEST.map((track) => track.id)
+            const locked = pool.filter((id) => !metaProgress.unlockedTracks.includes(id))
+            const candidates = locked.length > 0 ? locked : pool
+            if (!candidates.length) {
+              setAdStatus('Нет доступных треков для разблокировки.')
+              break
+            }
+            const chosen = candidates[Math.floor(Math.random() * candidates.length)]
+            setSessionUnlocks((previous) => Array.from(new Set([chosen, ...previous])))
+            setAdStatus('Новый трек доступен до конца сессии!')
+            break
+          }
+          case 'currency_boost':
+          default: {
+            updateMetaProgress((previous) => ({ ...previous, coins: previous.coins + result.reward.amount }))
+            setAdStatus(`Получено ${result.reward.amount} монет.`)
+            break
+          }
+        }
+      } catch (error) {
+        console.warn('Rewarded ad failed', error)
+        setAdStatus('Не удалось показать ролик. Попробуйте позже.')
+      }
+    },
+    [adService, analytics, handleStartGame, metaProgress.unlockedTracks, updateMetaProgress],
+  )
+
   const handleChangeDpr = useCallback((value: number) => {
     setDprCap(value)
   }, [])
@@ -388,6 +718,33 @@ export function App() {
 
   const lastTrack = useMemo(() => (lastTrackId ? resolveTrackById(lastTrackId) ?? null : null), [lastTrackId, resolveTrackById])
 
+  const challengeSummary = useMemo(
+    () => ({
+      daily: `${Math.min(dailyChallenge.goal, dailyChallenge.progress)}/${dailyChallenge.goal}`,
+      weekly: `${Math.min(weeklyChallenge.goal, weeklyChallenge.progress)}/${weeklyChallenge.goal}`,
+    }),
+    [dailyChallenge, weeklyChallenge],
+  )
+
+  const battlePassRewards = useMemo(() => getBattlePassRewards(), [])
+
+  const sharePresets = useMemo(() => shareExporter?.getPresets() ?? [], [shareExporter])
+
+  const adAvailability: Record<RewardedAdPlacement, { remaining: number; cooldown: number }> = {
+    second_chance: {
+      remaining: adService.getRemainingQuota('second_chance'),
+      cooldown: adService.getCooldownMinutes('second_chance'),
+    },
+    unlock_track_session: {
+      remaining: adService.getRemainingQuota('unlock_track_session'),
+      cooldown: adService.getCooldownMinutes('unlock_track_session'),
+    },
+    currency_boost: {
+      remaining: adService.getRemainingQuota('currency_boost'),
+      cooldown: adService.getCooldownMinutes('currency_boost'),
+    },
+  }
+
   return (
     <div className="min-h-screen bg-[#0B0F14] text-slate-100">
       {screen === 'home' ? (
@@ -395,11 +752,17 @@ export function App() {
           onStart={handleStartGame}
           onOpenSongSelect={() => setScreen('song-select')}
           onOpenSettings={() => setScreen('settings')}
+          onOpenStore={() => setScreen('store')}
+          onOpenBattlePass={() => setScreen('battle-pass')}
+          onOpenEvents={() => setScreen('events')}
+          onOpenShare={() => setScreen('share')}
           lastTrack={lastTrack}
           mode={worldMode}
           onChangeMode={setWorldMode}
           upgrades={activeUpgrades}
           meta={metaProgress}
+          currency={metaProgress.coins}
+          challengeSummary={challengeSummary}
         />
       ) : null}
 
@@ -418,6 +781,7 @@ export function App() {
           audioSupported={audioSupported}
           recentTracks={recentTracks}
           onSelectRecentTrack={handleSelectRecentTrack}
+          temporaryUnlocks={sessionUnlocks}
         />
       ) : null}
 
@@ -448,6 +812,7 @@ export function App() {
           meta={metaProgress}
           onComplete={handleShowResults}
           onExit={handleExitGame}
+          onRecorderReady={handleRecorderReady}
         />
       ) : null}
 
@@ -460,6 +825,61 @@ export function App() {
           onSongSelect={() => setScreen('song-select')}
           onSelectUpgrade={handleSelectUpgrade}
           upgrades={activeUpgrades}
+          onOpenShare={() => setScreen('share')}
+          onWatchAd={handleWatchAd}
+          adAvailability={adAvailability}
+          adStatus={adStatus}
+        />
+      ) : null}
+
+      {screen === 'store' ? (
+        <StoreScreen
+          meta={metaProgress}
+          config={remoteConfig}
+          onBack={() => setScreen('home')}
+          onCommitPurchase={handleStoreCommit}
+          onPurchaseError={handleStoreError}
+          onWatchAd={() => handleWatchAd('currency_boost')}
+          adQuota={adAvailability.currency_boost.remaining}
+          adCooldownMinutes={adAvailability.currency_boost.cooldown}
+          message={storeMessage}
+        />
+      ) : null}
+
+      {screen === 'battle-pass' ? (
+        <BattlePassScreen
+          meta={metaProgress}
+          rewards={battlePassRewards}
+          seasonEndsAt={metaProgress.battlePass.expiresAt}
+          onClaim={handleClaimBattlePass}
+          onUnlockPremium={handleUnlockPremium}
+          onBack={() => setScreen('home')}
+          onCopySeasonLink={handleCopySeasonLink}
+          statusMessage={battlePassMessage}
+        />
+      ) : null}
+
+      {screen === 'events' ? (
+        <EventsScreen
+          daily={dailyChallenge}
+          weekly={weeklyChallenge}
+          onBack={() => setScreen('home')}
+          onClaimDaily={() => handleClaimChallenge('daily')}
+          onClaimWeekly={() => handleClaimChallenge('weekly')}
+          statusMessage={eventsMessage}
+        />
+      ) : null}
+
+      {screen === 'share' ? (
+        <ShareScreen
+          exporter={shareExporter}
+          presets={sharePresets}
+          exports={shareHistory}
+          onExport={handleShareExport}
+          onBack={() => setScreen('home')}
+          onCopyLink={handleCopyShareLink}
+          shareLink={shareLink}
+          statusMessage={shareStatusMessage}
         />
       ) : null}
     </div>

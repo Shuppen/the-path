@@ -25,6 +25,7 @@ import {
 import PauseScreen from './Pause'
 import { padScore } from '../ui/scoreFormatting'
 import BeatDebugOverlay from '../ui/BeatDebugOverlay'
+import ReplayClipExporter from '../share/ReplayClipExporter'
 
 interface GameScreenProps {
   track: AudioTrackManifestEntry
@@ -36,6 +37,7 @@ interface GameScreenProps {
   meta: MetaProgressState
   onComplete: (snapshot: WorldSnapshot) => void
   onExit: (snapshot: WorldSnapshot | null) => void
+  onRecorderReady?: (exporter: ReplayClipExporter | null) => void
 }
 
 interface HudState {
@@ -68,7 +70,18 @@ const clamp = (value: number, min: number, max: number): number => {
   return value
 }
 
-export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, meta, onComplete, onExit }: GameScreenProps) {
+export function GameScreen({
+  track,
+  audio,
+  dprCap,
+  calibration,
+  upgrades,
+  mode,
+  meta,
+  onComplete,
+  onExit,
+  onRecorderReady,
+}: GameScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const loopRef = useRef<LoopController | null>(null)
   const inputRef = useRef<InputManager | null>(null)
@@ -76,6 +89,7 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
   const worldRef = useRef<World | null>(null)
   const metricsRef = useRef<ViewportMetrics | null>(null)
   const profileRef = useRef<DevicePerformanceProfile | null>(null)
+  const replayRef = useRef<ReplayClipExporter | null>(null)
   const [hud, setHud] = useState<HudState>(initialHudState)
   const [paused, setPaused] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -83,6 +97,34 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
   const completionGuard = useRef(false)
 
   const selectedTrack = useMemo(() => track, [track])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      onRecorderReady?.(null)
+      return undefined
+    }
+
+    const exporter = new ReplayClipExporter(canvas, audio)
+    if (!exporter.isSupported()) {
+      onRecorderReady?.(null)
+      exporter.destroy()
+      return undefined
+    }
+
+    replayRef.current = exporter
+    exporter.start()
+    onRecorderReady?.(exporter)
+
+    return () => {
+      exporter.stop()
+      exporter.destroy()
+      if (replayRef.current === exporter) {
+        replayRef.current = null
+      }
+      onRecorderReady?.(null)
+    }
+  }, [audio, onRecorderReady])
 
   const updateHudFromWorld = useCallback((world: World) => {
     const snapshot = world.snapshot()
