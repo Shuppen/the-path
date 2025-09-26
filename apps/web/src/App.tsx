@@ -643,7 +643,8 @@ export function App() {
           setAdStatus(message)
           return
         }
-        analytics.trackAdReward({ placement, rewardType: result.reward.type, value: result.reward.amount })
+        const reward = result.reward
+        analytics.trackAdReward({ placement, rewardType: reward.type, value: reward.amount })
         switch (placement) {
           case 'second_chance': {
             setAdStatus('Вторая жизнь активирована!')
@@ -665,8 +666,9 @@ export function App() {
           }
           case 'currency_boost':
           default: {
-            updateMetaProgress((previous) => ({ ...previous, coins: previous.coins + result.reward.amount }))
-            setAdStatus(`Получено ${result.reward.amount} монет.`)
+            const rewardAmount = reward.amount
+            updateMetaProgress((previous) => ({ ...previous, coins: previous.coins + rewardAmount }))
+            setAdStatus(`Получено ${rewardAmount} монет.`)
             break
           }
         }
