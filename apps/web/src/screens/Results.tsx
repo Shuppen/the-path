@@ -1,5 +1,6 @@
 import type { AudioTrackManifestEntry } from '../assets/tracks'
 import type { ActiveUpgrade, UpgradeCard, WorldSnapshot } from '../world'
+import type { RewardedAdPlacement } from '../services/remoteConfig'
 
 interface ResultsScreenProps {
   track: AudioTrackManifestEntry
@@ -9,6 +10,10 @@ interface ResultsScreenProps {
   onSongSelect: () => void
   onSelectUpgrade: (card: UpgradeCard) => void
   upgrades: ActiveUpgrade[]
+  onOpenShare: () => void
+  onWatchAd: (placement: RewardedAdPlacement) => void
+  adAvailability: Record<RewardedAdPlacement, { remaining: number; cooldown: number }>
+  adStatus?: string | null
 }
 
 const getStarCount = (accuracy: number): number => {
@@ -29,6 +34,10 @@ export function ResultsScreen({
   onSongSelect,
   onSelectUpgrade,
   upgrades,
+  onOpenShare,
+  onWatchAd,
+  adAvailability,
+  adStatus,
 }: ResultsScreenProps) {
   const stars = getStarCount(snapshot.accuracy)
   const starIcons = Array.from({ length: 3 }, (_, index) => index < stars)
@@ -95,9 +104,69 @@ export function ResultsScreen({
             </div>
           </section>
         ) : null}
+
+        <section className="space-y-3 rounded-3xl border border-slate-700/60 bg-slate-900/80 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-white">Наградная реклама</h2>
+            <span className="text-xs text-slate-400">Только по желанию игрока</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {([
+              {
+                placement: 'second_chance' as RewardedAdPlacement,
+                label: 'Вторая жизнь',
+                description: 'Перезапустить попытку без потери прогресса.',
+              },
+              {
+                placement: 'unlock_track_session' as RewardedAdPlacement,
+                label: 'Трек на сессию',
+                description: 'Открыть один из треков до конца сессии.',
+              },
+              {
+                placement: 'currency_boost' as RewardedAdPlacement,
+                label: '+валюта',
+                description: 'Получить мягкую валюту.',
+              },
+            ] satisfies Array<{ placement: RewardedAdPlacement; label: string; description: string }>).map(
+              (option) => {
+                const stats = adAvailability[option.placement]
+                const disabled = !stats || stats.remaining <= 0
+                return (
+                  <button
+                    key={option.placement}
+                    type="button"
+                    onClick={() => onWatchAd(option.placement)}
+                    disabled={disabled}
+                    className={`rounded-2xl border px-4 py-3 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 ${
+                      disabled
+                        ? 'cursor-not-allowed border-slate-700/60 bg-slate-900/60 text-slate-500'
+                        : 'border-slate-700/60 bg-slate-900/80 text-slate-200 hover:border-cyan-400/40'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-white">{option.label}</p>
+                    <p className="mt-1 text-xs text-slate-400">{option.description}</p>
+                    <p className="mt-2 text-[0.65rem] text-slate-500">
+                      {disabled
+                        ? `Подождите ~${Math.round(stats?.cooldown ?? 0)} мин.`
+                        : `Доступно показов: ${stats?.remaining ?? 0}`}
+                    </p>
+                  </button>
+                )
+              },
+            )}
+          </div>
+          {adStatus ? <p className="text-[0.7rem] text-emerald-300">{adStatus}</p> : null}
+        </section>
       </main>
 
       <footer className="w-full max-w-xl space-y-3">
+        <button
+          type="button"
+          onClick={onOpenShare}
+          className="w-full rounded-full border border-slate-700/60 bg-slate-900/80 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-400/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+        >
+          Поделиться клипом
+        </button>
         <button
           type="button"
           onClick={onRetry}

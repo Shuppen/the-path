@@ -1,5 +1,5 @@
 import { CALIBRATION_LIMIT_MS } from './constants'
-import type { CalibrationSettings, MetaProgressState } from './types'
+import type { BattlePassState, CalibrationSettings, MetaProgressState } from './types'
 
 const CALIBRATION_STORAGE_KEY = 'the-path/calibration'
 const META_STORAGE_KEY = 'the-path/meta'
@@ -27,15 +27,37 @@ const normalizeCalibration = (settings: Partial<CalibrationSettings> | null | un
   audioOffsetMs: clampCalibration(settings?.audioOffsetMs ?? 0),
 })
 
+const normalizeBattlePass = (battlePass: Partial<BattlePassState> | null | undefined): BattlePassState => ({
+  seasonId: typeof battlePass?.seasonId === 'string' ? battlePass.seasonId : 'synth-season-1',
+  xp: Number.isFinite(battlePass?.xp) ? Math.max(0, Math.floor(battlePass!.xp!)) : 0,
+  premiumUnlocked: Boolean(battlePass?.premiumUnlocked),
+  freeClaimed: Array.isArray(battlePass?.freeClaimed)
+    ? (battlePass!.freeClaimed as unknown[]).filter((entry): entry is string => typeof entry === 'string')
+    : [],
+  premiumClaimed: Array.isArray(battlePass?.premiumClaimed)
+    ? (battlePass!.premiumClaimed as unknown[]).filter((entry): entry is string => typeof entry === 'string')
+    : [],
+  expiresAt: Number.isFinite(battlePass?.expiresAt) ? Math.max(0, Math.floor(battlePass!.expiresAt!)) : 0,
+})
+
 const normalizeMeta = (meta: Partial<MetaProgressState> | null | undefined): MetaProgressState => ({
   xp: Number.isFinite(meta?.xp) ? Math.max(0, Math.floor(meta!.xp!)) : 0,
   level: Number.isFinite(meta?.level) ? Math.max(1, Math.floor(meta!.level!)) : 1,
+  coins: Number.isFinite(meta?.coins) ? Math.max(0, Math.floor(meta!.coins!)) : 0,
   unlockedTracks: Array.isArray(meta?.unlockedTracks)
     ? (meta!.unlockedTracks as unknown[]).filter((entry): entry is string => typeof entry === 'string')
     : [],
   unlockedSkins: Array.isArray(meta?.unlockedSkins)
     ? (meta!.unlockedSkins as unknown[]).filter((entry): entry is string => typeof entry === 'string')
     : [],
+  ownedThemes: Array.isArray(meta?.ownedThemes)
+    ? (meta!.ownedThemes as unknown[]).filter((entry): entry is string => typeof entry === 'string')
+    : ['default-night'],
+  ownedEffects: Array.isArray(meta?.ownedEffects)
+    ? (meta!.ownedEffects as unknown[]).filter((entry): entry is string => typeof entry === 'string')
+    : ['classic-trail'],
+  starterPackPurchased: Boolean(meta?.starterPackPurchased),
+  battlePass: normalizeBattlePass(meta?.battlePass),
 })
 
 export const readCalibrationSettings = (): CalibrationSettings => {

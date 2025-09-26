@@ -5,22 +5,34 @@ interface HomeScreenProps {
   onStart: () => void
   onOpenSongSelect: () => void
   onOpenSettings: () => void
+  onOpenStore: () => void
+  onOpenBattlePass: () => void
+  onOpenEvents: () => void
+  onOpenShare: () => void
   onChangeMode: (mode: WorldMode) => void
   mode: WorldMode
   upgrades: ActiveUpgrade[]
   meta: MetaProgressState
   lastTrack?: AudioTrackManifestEntry | null
+  currency: number
+  challengeSummary: { daily: string; weekly: string }
 }
 
 export function HomeScreen({
   onStart,
   onOpenSongSelect,
   onOpenSettings,
+  onOpenStore,
+  onOpenBattlePass,
+  onOpenEvents,
+  onOpenShare,
   onChangeMode,
   mode,
   upgrades,
   meta,
   lastTrack,
+  currency,
+  challengeSummary,
 }: HomeScreenProps) {
   const nextLevelXp = Math.max(meta.level * 50, 1)
   const xpIntoLevel = meta.xp % nextLevelXp
@@ -28,9 +40,22 @@ export function HomeScreen({
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-between bg-[#0B0F14] text-slate-100">
-      <header className="w-full max-w-xl px-6 pt-16 text-center">
+      <header className="w-full max-w-xl px-6 pt-16 text-center space-y-4">
+        <div className="flex items-center justify-between rounded-full border border-slate-700/60 bg-slate-900/70 px-5 py-2 text-xs">
+          <button
+            type="button"
+            onClick={onOpenStore}
+            className="rounded-full border border-transparent px-3 py-1 font-semibold text-cyan-200 transition hover:border-cyan-400/40 hover:text-white"
+          >
+            Магазин
+          </button>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span>Баланс</span>
+            <span className="rounded-full bg-slate-800 px-3 py-1 font-semibold text-cyan-200">{currency.toLocaleString('ru-RU')}</span>
+          </div>
+        </div>
         <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">The Path</h1>
-        <p className="mt-3 text-sm text-slate-300 sm:text-base">
+        <p className="mt-1 text-sm text-slate-300 sm:text-base">
           Вертикальная ритм-аркада: свайпайте по дорожкам и попадайте в ритм.
         </p>
       </header>
@@ -73,7 +98,7 @@ export function HomeScreen({
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-700/60 bg-slate-900/80 p-5">
+        <section className="rounded-3xl border border-slate-700/60 bg-slate-900/80 p-5 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-white">Метапрогресс</h2>
@@ -81,22 +106,43 @@ export function HomeScreen({
             </div>
             <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-cyan-200">{progressPercent}%</span>
           </div>
-          <div className="mt-3 h-2 rounded-full bg-slate-800">
+          <div className="h-2 rounded-full bg-slate-800">
             <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-500" style={{ width: `${progressPercent}%` }} />
           </div>
+          <div className="grid gap-2 text-[0.7rem] text-slate-300 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onOpenBattlePass}
+              className="flex items-center justify-between rounded-2xl border border-slate-700/60 bg-slate-900/70 px-4 py-3 text-left transition hover:border-cyan-400/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+            >
+              <span>
+                Battle Pass
+                <span className="block text-xs text-slate-400">Награды сезона и редкий трек</span>
+              </span>
+              <span className="text-cyan-200">{meta.battlePass.xp} XP</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenEvents}
+              className="flex items-center justify-between rounded-2xl border border-slate-700/60 bg-slate-900/70 px-4 py-3 text-left transition hover:border-violet-400/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+            >
+              <span>
+                Челленджи
+                <span className="block text-xs text-slate-400">{challengeSummary.daily}</span>
+              </span>
+              <span className="text-violet-200">{challengeSummary.weekly}</span>
+            </button>
+          </div>
           {upgrades.length > 0 ? (
-            <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-200">
+            <div className="flex flex-wrap gap-2 text-xs text-slate-200">
               {upgrades.map((upgrade) => (
-                <span
-                  key={upgrade.id}
-                  className="rounded-full bg-slate-800/80 px-3 py-1 font-medium text-cyan-200"
-                >
+                <span key={upgrade.id} className="rounded-full bg-slate-800/80 px-3 py-1 font-medium text-cyan-200">
                   {upgrade.name} ×{upgrade.stacks}
                 </span>
               ))}
             </div>
           ) : (
-            <p className="mt-4 text-xs text-slate-400">Открывайте карты улучшений после прохождения треков.</p>
+            <p className="text-xs text-slate-400">Открывайте карты улучшений после прохождения треков.</p>
           )}
         </section>
 
@@ -131,6 +177,13 @@ export function HomeScreen({
             className="rounded-full border border-slate-700/60 bg-slate-900/70 px-4 py-2 font-medium text-slate-200 transition hover:border-cyan-400/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
           >
             Настройки
+          </button>
+          <button
+            type="button"
+            onClick={onOpenShare}
+            className="rounded-full border border-slate-700/60 bg-slate-900/70 px-4 py-2 font-medium text-slate-200 transition hover:border-violet-400/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+          >
+            Поделиться
           </button>
         </div>
       </footer>

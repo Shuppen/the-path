@@ -24,6 +24,7 @@ interface SongSelectScreenProps {
   audioSupported: boolean
   recentTracks: StoredRecentTrack[]
   onSelectRecentTrack: (track: StoredRecentTrack) => void
+  temporaryUnlocks?: string[]
 }
 
 const listClasses = 'grid gap-3'
@@ -42,9 +43,11 @@ export function SongSelectScreen({
   audioSupported,
   recentTracks,
   onSelectRecentTrack,
+  temporaryUnlocks,
 }: SongSelectScreenProps) {
   const renderTrackButton = (track: AudioTrackManifestEntry, accent: 'default' | 'uploaded' = 'default') => {
     const isSelected = track.id === selectedTrackId
+    const isTemporary = temporaryUnlocks?.includes(track.id)
     const baseClasses =
       'flex items-center justify-between rounded-3xl px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900'
     const palette =
@@ -61,6 +64,11 @@ export function SongSelectScreen({
         <span className="flex flex-col">
           <span className="text-sm font-semibold sm:text-base">{track.title}</span>
           <span className="text-xs text-slate-400 sm:text-sm">{track.artist}</span>
+          {isTemporary ? (
+            <span className="mt-1 inline-flex items-center rounded-full bg-cyan-500/20 px-2 py-1 text-[0.65rem] font-semibold text-cyan-200">
+              Разблокировано на сессию
+            </span>
+          ) : null}
         </span>
         <span className="text-xs font-mono text-slate-300">{formatTime(track.duration)}</span>
       </button>
