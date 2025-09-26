@@ -1,4 +1,6 @@
 import type { AudioTrackManifestEntry } from '../assets/tracks'
+import { EQ_PRESETS, getEqPresetById, type EqPreset } from './eqPresets'
+import { ProceduralSfxEngine, type SfxTriggerOptions } from './proceduralSfx'
 
 const clamp = (value: number, min: number, max: number): number => {
   if (Number.isNaN(value)) return min
@@ -23,6 +25,11 @@ export interface BeatEvent {
   confidence: number
 }
 
+export interface OnsetEvent {
+  time: number
+  strength: number
+}
+
 export interface EnergySpikeEvent {
   time: number
   intensity: number
@@ -39,6 +46,24 @@ export interface ProgressEvent {
   progress: number
 }
 
+export interface BeatGridState {
+  bpm: number
+  interval: number
+  offset: number
+  lastBeatTime: number
+}
+
+export interface GridEvent extends BeatGridState {
+  confidence: number
+}
+
+export interface QuantizedTime {
+  target: number
+  index: number
+  division: number
+  delta: number
+}
+
 export interface WebAudioAnalysisOptions {
   fftSize: number
   smoothingTimeConstant: number
@@ -51,6 +76,9 @@ export interface WebAudioAnalysisOptions {
   minBreakInterval: number
   historySize: number
   bassRange: readonly [number, number]
+  onsetSensitivity: number
+  onsetMinInterval: number
+  gridSmoothing: number
 }
 
 const DEFAULT_OPTIONS: WebAudioAnalysisOptions = {
@@ -65,6 +93,9 @@ const DEFAULT_OPTIONS: WebAudioAnalysisOptions = {
   minBreakInterval: 2.5,
   historySize: 48,
   bassRange: [40, 180],
+  onsetSensitivity: 1.65,
+  onsetMinInterval: 0.1,
+  gridSmoothing: 0.25,
 }
 
 type Listener<T> = (payload: T) => void
@@ -80,20 +111,37 @@ export class WebAudioAnalysis {
 
   private audioContext: AudioContext | null = null
   private analyser: AnalyserNode | null = null
-  private gainNode: GainNode | null = null
+  private masterGain: GainNode | null = null
+  private musicBus: GainNode | null = null
+  private baseLayerGain: GainNode | null = null
+  private percussionLayerGain: GainNode | null = null
+  private feverLayerGain: GainNode | null = null
+  private duckingGain: GainNode | null = null
+  private musicGain: GainNode | null = null
+  private sfxGain: GainNode | null = null
+  private voiceGain: GainNode | null = null
+  private eqLow: BiquadFilterNode | null = null
+  private eqMid: BiquadFilterNode | null = null
+  private eqHigh: BiquadFilterNode | null = null
+  private feverOscillator: OscillatorNode | null = null
+  private feverOscGain: GainNode | null = null
   private source: AudioBufferSourceNode | null = null
   private buffer: AudioBuffer | null = null
 
   private frequencyData: Uint8Array | null = null
+  private previousSpectrum: Float32Array | null = null
   private bassBand: FrequencyBand | null = null
 
   private beatHistory: number[] = []
   private energyHistory: number[] = []
+  private fluxHistory: number[] = []
+  private onsetHistory: number[] = []
   private breakTimer = 0
   private lastBeatEmission = 0
   private lastEnergyEmission = 0
   private lastBreakEmission = 0
   private lastAnalysisTime = 0
+  private lastOnsetEmission = 0
 
   private startOffset = 0
   private startedAt = 0
@@ -104,14 +152,32 @@ export class WebAudioAnalysis {
   private playbackState: AudioPlaybackState = 'idle'
 
   private readonly beatListeners = new Set<Listener<BeatEvent>>()
+  private readonly onsetListeners = new Set<Listener<OnsetEvent>>()
   private readonly energyListeners = new Set<Listener<EnergySpikeEvent>>()
   private readonly breakListeners = new Set<Listener<BreakEvent>>()
   private readonly progressListeners = new Set<Listener<ProgressEvent>>()
   private readonly stateListeners = new Set<Listener<AudioPlaybackState>>()
+  private readonly gridListeners = new Set<Listener<GridEvent>>()
   private readonly externalOutputs = new Set<AudioNode>()
   private readonly customBuffers = new Map<string, AudioBuffer>()
   private readonly customBufferOrder: string[] = []
   private readonly maxCustomBuffers = 6
+
+  private beatGrid: BeatGridState | null = null
+  private readonly beatTimes: number[] = []
+  private readonly onsetTimes: number[] = []
+  private readonly quantizedIndices = new Map<number, number>()
+
+  private percussionEnvelopeTimeout: number | null = null
+  private noiseBuffer: AudioBuffer | null = null
+  private sfxEngine: ProceduralSfxEngine | null = null
+  private eqPresetId = 'flat'
+  private customEqBands: EqPreset['bands'] | null = null
+  private readonly comboState = {
+    combo: 0,
+    feverActive: false,
+    feverLevel: 0,
+  }
 
   constructor(options: Partial<WebAudioAnalysisOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options }
@@ -122,6 +188,23 @@ export class WebAudioAnalysis {
     this.beatListeners.add(listener)
     return () => {
       this.beatListeners.delete(listener)
+    }
+  }
+
+  onOnset(listener: Listener<OnsetEvent>): () => void {
+    this.onsetListeners.add(listener)
+    return () => {
+      this.onsetListeners.delete(listener)
+    }
+  }
+
+  onGrid(listener: Listener<GridEvent>): () => void {
+    this.gridListeners.add(listener)
+    if (this.beatGrid) {
+      listener({ ...this.beatGrid, confidence: 1 })
+    }
+    return () => {
+      this.gridListeners.delete(listener)
     }
   }
 
@@ -199,6 +282,129 @@ export class WebAudioAnalysis {
     return 0
   }
 
+  getBeatGrid(): BeatGridState | null {
+    if (!this.beatGrid) return null
+    return { ...this.beatGrid }
+  }
+
+  quantizeTime(time: number, division = 4): QuantizedTime {
+    const grid = this.beatGrid
+    if (!grid || !Number.isFinite(time)) {
+      return { target: time, index: 0, division, delta: 0 }
+    }
+
+    const safeDivision = Math.max(1, Math.floor(division))
+    const step = grid.interval / safeDivision
+    if (!Number.isFinite(step) || step <= 0) {
+      return { target: time, index: 0, division: safeDivision, delta: 0 }
+    }
+
+    const relative = (time - grid.offset) / step
+    const index = Math.round(relative)
+    const target = grid.offset + index * step
+    const delta = time - target
+    return { target, index, division: safeDivision, delta }
+  }
+
+  getDetectedBpm(): number {
+    if (this.beatGrid) return this.beatGrid.bpm
+    if (this.track?.bpm) return this.track.bpm
+    return 0
+  }
+
+  getEqPresetId(): string {
+    return this.eqPresetId
+  }
+
+  listEqPresets(): EqPreset[] {
+    return EQ_PRESETS.map((preset) => ({ ...preset }))
+  }
+
+  setEqPreset(id: string): void {
+    const preset = getEqPresetById(id) ?? EQ_PRESETS[0]
+    this.eqPresetId = preset.id
+    this.customEqBands = null
+    this.applyEqBands(preset)
+  }
+
+  setCustomEq(bands: EqPreset['bands']): void {
+    this.eqPresetId = 'custom'
+    this.customEqBands = { ...bands }
+    this.applyEqBands({ id: 'custom', label: 'Custom', bands })
+  }
+
+  setMusicVolume(value: number): void {
+    if (!this.supported) return
+    this.prepareGraph()
+    if (!this.musicGain || !this.audioContext) return
+    const target = clamp(value, 0, 2)
+    const now = this.audioContext.currentTime
+    this.musicGain.gain.cancelScheduledValues(now)
+    this.musicGain.gain.setTargetAtTime(target, now, 0.08)
+  }
+
+  setSfxVolume(value: number): void {
+    if (!this.supported) return
+    this.prepareGraph()
+    if (!this.sfxGain || !this.audioContext) return
+    const target = clamp(value, 0, 2)
+    const now = this.audioContext.currentTime
+    this.sfxGain.gain.cancelScheduledValues(now)
+    this.sfxGain.gain.setTargetAtTime(target, now, 0.05)
+  }
+
+  setVoiceVolume(value: number): void {
+    if (!this.supported) return
+    this.prepareGraph()
+    if (!this.voiceGain || !this.audioContext) return
+    const target = clamp(value, 0, 2)
+    const now = this.audioContext.currentTime
+    this.voiceGain.gain.cancelScheduledValues(now)
+    this.voiceGain.gain.setTargetAtTime(target, now, 0.05)
+  }
+
+  updatePerformanceState(state: { combo: number; feverActive: boolean; feverLevel: number }): void {
+    this.comboState.combo = Math.max(0, state.combo)
+    this.comboState.feverActive = Boolean(state.feverActive)
+    this.comboState.feverLevel = clamp(state.feverLevel, 0, 1)
+    if (!this.supported || !this.audioContext) return
+    this.prepareGraph()
+    const ctx = this.audioContext
+    const now = ctx.currentTime
+
+    if (this.percussionLayerGain) {
+      const combo = this.comboState.combo
+      const baseLevel = combo >= 32 ? 0.75 : combo >= 16 ? 0.55 : combo >= 8 ? 0.35 : 0
+      this.percussionLayerGain.gain.cancelScheduledValues(now)
+      this.percussionLayerGain.gain.setTargetAtTime(baseLevel, now, 0.2)
+    }
+
+    if (this.feverLayerGain) {
+      const target = this.comboState.feverActive ? clamp(0.4 + this.comboState.feverLevel * 0.6, 0.35, 1.2) : 0
+      this.feverLayerGain.gain.cancelScheduledValues(now)
+      this.feverLayerGain.gain.setTargetAtTime(target, now, 0.3)
+    }
+
+    this.updateFeverOscillator()
+  }
+
+  triggerMissDucking(): void {
+    if (!this.supported || !this.audioContext || !this.duckingGain) return
+    const ctx = this.audioContext
+    const now = ctx.currentTime
+    const param = this.duckingGain.gain
+    param.cancelScheduledValues(now)
+    const current = param.value
+    param.setValueAtTime(current, now)
+    param.linearRampToValueAtTime(Math.max(0.45, current * 0.6), now + 0.04)
+    param.setTargetAtTime(1, now + 0.04, 0.4)
+  }
+
+  playSfx(name: string, options: SfxTriggerOptions = {}): void {
+    const engine = this.getOrCreateSfxEngine()
+    engine?.trigger(name, { ...options, grid: this.getBeatGrid() })
+  }
+
   hasCustomTrack(id: string): boolean {
     return this.customBuffers.has(id)
   }
@@ -214,7 +420,7 @@ export class WebAudioAnalysis {
   async importFromBlob(
     blob: Blob,
     options: { id?: string } = {},
-  ): Promise<{ id: string; duration: number; sampleRate: number; bpm: number }> {
+  ): Promise<{ id: string; duration: number; sampleRate: number; bpm: number; peaks: number[] }> {
     if (!this.supported) {
       throw new Error('Web Audio API is not available in this environment')
     }
@@ -227,12 +433,14 @@ export class WebAudioAnalysis {
     this.registerCustomBuffer(id, audioBuffer)
 
     const bpm = this.estimateTempo(audioBuffer)
+    const peaks = this.extractPeaks(audioBuffer)
 
     return {
       id,
       duration: audioBuffer.duration,
       sampleRate: audioBuffer.sampleRate,
       bpm,
+      peaks,
     }
   }
 
@@ -347,6 +555,39 @@ export class WebAudioAnalysis {
     this.buffer = null
     this.track = null
     this.frequencyData = null
+    this.previousSpectrum = null
+    this.beatGrid = null
+    this.beatTimes.length = 0
+    this.onsetTimes.length = 0
+    this.quantizedIndices.clear()
+    if (this.percussionEnvelopeTimeout !== null) {
+      clearTimeout(this.percussionEnvelopeTimeout)
+      this.percussionEnvelopeTimeout = null
+    }
+    this.masterGain = null
+    this.musicBus = null
+    this.baseLayerGain = null
+    this.percussionLayerGain = null
+    this.feverLayerGain = null
+    this.duckingGain = null
+    this.musicGain = null
+    this.sfxGain = null
+    this.voiceGain = null
+    this.eqLow = null
+    this.eqMid = null
+    this.eqHigh = null
+    if (this.feverOscillator) {
+      try {
+        this.feverOscillator.stop()
+      } catch {
+        /* noop */
+      }
+      this.feverOscillator.disconnect()
+    }
+    this.feverOscillator = null
+    this.feverOscGain = null
+    this.noiseBuffer = null
+    this.sfxEngine = null
     this.customBuffers.clear()
     this.customBufferOrder.length = 0
     this.audioContext?.close().catch(() => {
@@ -357,13 +598,14 @@ export class WebAudioAnalysis {
   }
 
   private startPlayback(offset: number): void {
-    if (!this.supported || !this.buffer || !this.analyser || !this.gainNode || !this.audioContext) return
+    if (!this.supported || !this.buffer || !this.audioContext || !this.analyser || !this.baseLayerGain) return
 
+    const ctx = this.audioContext
     const clampedOffset = clamp(offset, 0, this.buffer.duration)
-    const source = this.audioContext.createBufferSource()
+    const source = ctx.createBufferSource()
     source.buffer = this.buffer
     source.connect(this.analyser)
-    this.analyser.connect(this.gainNode)
+    source.connect(this.baseLayerGain)
 
     source.onended = () => {
       this.source = null
@@ -374,7 +616,7 @@ export class WebAudioAnalysis {
     }
 
     this.source = source
-    this.startedAt = this.audioContext.currentTime - clampedOffset
+    this.startedAt = ctx.currentTime - clampedOffset
     this.startOffset = clampedOffset
     this.resetAnalysisState()
     this.updatePlaybackState('playing')
@@ -390,27 +632,163 @@ export class WebAudioAnalysis {
 
   private prepareGraph(): void {
     if (!this.supported || !this.audioContext) return
+    const ctx = this.audioContext
+
     if (!this.analyser) {
-      this.analyser = this.audioContext.createAnalyser()
+      this.analyser = ctx.createAnalyser()
       this.analyser.fftSize = this.options.fftSize
       this.analyser.smoothingTimeConstant = this.options.smoothingTimeConstant
       this.analyser.minDecibels = -110
       this.analyser.maxDecibels = -10
       this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount)
     }
-    if (!this.gainNode) {
-      this.gainNode = this.audioContext.createGain()
-      this.gainNode.gain.value = 1
+
+    if (!this.masterGain) {
+      this.masterGain = ctx.createGain()
+      this.masterGain.gain.value = 1
     }
-    this.refreshOutputConnections()
-    if (this.analyser && this.gainNode) {
+
+    if (!this.musicBus) {
+      this.musicBus = ctx.createGain()
+      this.musicBus.gain.value = 1
+    }
+
+    if (!this.baseLayerGain) {
+      this.baseLayerGain = ctx.createGain()
+      this.baseLayerGain.gain.value = 1
+    }
+
+    if (!this.percussionLayerGain) {
+      this.percussionLayerGain = ctx.createGain()
+      this.percussionLayerGain.gain.value = 0
+    }
+
+    if (!this.feverLayerGain) {
+      this.feverLayerGain = ctx.createGain()
+      this.feverLayerGain.gain.value = 0
+    }
+
+    if (!this.eqLow) {
+      this.eqLow = ctx.createBiquadFilter()
+      this.eqLow.type = 'lowshelf'
+      this.eqLow.frequency.value = 180
+      this.eqLow.gain.value = 0
+    }
+
+    if (!this.eqMid) {
+      this.eqMid = ctx.createBiquadFilter()
+      this.eqMid.type = 'peaking'
+      this.eqMid.Q.value = 0.9
+      this.eqMid.frequency.value = 920
+      this.eqMid.gain.value = 0
+    }
+
+    if (!this.eqHigh) {
+      this.eqHigh = ctx.createBiquadFilter()
+      this.eqHigh.type = 'highshelf'
+      this.eqHigh.frequency.value = 4200
+      this.eqHigh.gain.value = 0
+    }
+
+    if (!this.duckingGain) {
+      this.duckingGain = ctx.createGain()
+      this.duckingGain.gain.value = 1
+    }
+
+    if (!this.musicGain) {
+      this.musicGain = ctx.createGain()
+      this.musicGain.gain.value = 1
+    }
+
+    if (!this.sfxGain) {
+      this.sfxGain = ctx.createGain()
+      this.sfxGain.gain.value = 0.9
+    }
+
+    if (!this.voiceGain) {
+      this.voiceGain = ctx.createGain()
+      this.voiceGain.gain.value = 0.7
+    }
+
+    // Wire buses
+    if (this.musicBus && this.eqLow && this.eqMid && this.eqHigh && this.duckingGain && this.musicGain) {
       try {
-        this.analyser.disconnect()
+        this.musicBus.disconnect()
       } catch {
-        // ignore
+        /* noop */
       }
-      this.analyser.connect(this.gainNode)
+      this.musicBus.connect(this.eqLow)
+      this.eqLow.connect(this.eqMid)
+      this.eqMid.connect(this.eqHigh)
+      this.eqHigh.connect(this.duckingGain)
+      this.duckingGain.connect(this.musicGain)
     }
+
+    if (this.baseLayerGain && this.musicBus) {
+      try {
+        this.baseLayerGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.baseLayerGain.connect(this.musicBus)
+    }
+
+    if (this.percussionLayerGain && this.musicBus) {
+      try {
+        this.percussionLayerGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.percussionLayerGain.connect(this.musicBus)
+    }
+
+    if (this.feverLayerGain && this.musicBus) {
+      try {
+        this.feverLayerGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.feverLayerGain.connect(this.musicBus)
+    }
+
+    const preset =
+      this.eqPresetId === 'custom' && this.customEqBands
+        ? { id: 'custom', label: 'Custom', bands: this.customEqBands }
+        : getEqPresetById(this.eqPresetId) ?? EQ_PRESETS[0]
+    if (this.eqLow && this.eqMid && this.eqHigh) {
+      this.eqLow.gain.value = clamp(preset.bands.low, -12, 12)
+      this.eqMid.gain.value = clamp(preset.bands.mid, -12, 12)
+      this.eqHigh.gain.value = clamp(preset.bands.high, -12, 12)
+    }
+
+    if (this.masterGain && this.musicGain) {
+      try {
+        this.musicGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.musicGain.connect(this.masterGain)
+    }
+
+    if (this.sfxGain && this.masterGain) {
+      try {
+        this.sfxGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.sfxGain.connect(this.masterGain)
+    }
+
+    if (this.voiceGain && this.masterGain) {
+      try {
+        this.voiceGain.disconnect()
+      } catch {
+        /* noop */
+      }
+      this.voiceGain.connect(this.masterGain)
+    }
+
+    this.refreshOutputConnections()
   }
 
   private configureForBuffer(buffer: AudioBuffer, bpmHint?: number): void {
@@ -434,6 +812,15 @@ export class WebAudioAnalysis {
     this.options.breakHoldTime = clamp(windowSeconds * 6, 0.35, 2.4)
     this.options.minBreakInterval = clamp(beatInterval * 2.2, 1, 5.5)
     this.options.historySize = Math.max(32, Math.round(6 / Math.max(windowSeconds, 0.02)))
+
+    this.beatGrid = {
+      bpm,
+      interval: beatInterval,
+      offset: this.startOffset,
+      lastBeatTime: this.startOffset,
+    }
+    this.beatTimes.length = 0
+    this.quantizedIndices.clear()
 
     this.updateFrequencyBands()
   }
@@ -462,11 +849,21 @@ export class WebAudioAnalysis {
   private resetAnalysisState(): void {
     this.beatHistory = []
     this.energyHistory = []
+    this.fluxHistory = []
+    this.onsetHistory = []
+    this.onsetTimes.length = 0
+    this.lastOnsetEmission = -Infinity
     this.breakTimer = 0
     this.lastBeatEmission = -Infinity
     this.lastEnergyEmission = -Infinity
     this.lastBreakEmission = -Infinity
     this.lastAnalysisTime = this.startOffset
+    if (this.beatGrid) {
+      this.beatGrid.lastBeatTime = this.startOffset
+    }
+    if (this.previousSpectrum) {
+      this.previousSpectrum.fill(0)
+    }
   }
 
   private startAnalysisLoop(): void {
@@ -524,9 +921,42 @@ export class WebAudioAnalysis {
       return total / count
     }
 
-    const bassBand = this.bassBand ?? { from: 0, to: Math.max(1, Math.floor(frequencyData.length * 0.08)) }
+    const spectrumLength = frequencyData.length
+    if (!this.previousSpectrum || this.previousSpectrum.length !== spectrumLength) {
+      this.previousSpectrum = new Float32Array(spectrumLength)
+      this.previousSpectrum.fill(0)
+    }
+
+    let flux = 0
+    for (let i = 0; i < spectrumLength; i += 1) {
+      const magnitude = frequencyData[i] / 255
+      const deltaMagnitude = magnitude - this.previousSpectrum[i]
+      if (deltaMagnitude > 0) {
+        flux += deltaMagnitude
+      }
+      this.previousSpectrum[i] = magnitude
+    }
+
+    this.pushHistory(this.fluxHistory, flux)
+    const fluxBaseline = this.computeAverage(this.fluxHistory)
+    const onsetStrength = fluxBaseline > 0 ? flux / fluxBaseline : 0
+
+    if (
+      fluxBaseline > 0 &&
+      onsetStrength > this.options.onsetSensitivity &&
+      currentTime - this.lastOnsetEmission >= this.options.onsetMinInterval
+    ) {
+      this.lastOnsetEmission = currentTime
+      this.onsetTimes.push(currentTime)
+      if (this.onsetTimes.length > 128) {
+        this.onsetTimes.shift()
+      }
+      this.emitOnset({ time: currentTime, strength: onsetStrength })
+    }
+
+    const bassBand = this.bassBand ?? { from: 0, to: Math.max(1, Math.floor(spectrumLength * 0.08)) }
     const bassEnergy = average(bassBand.from, bassBand.to)
-    const totalEnergy = average(0, frequencyData.length - 1)
+    const totalEnergy = average(0, spectrumLength - 1)
 
     this.pushHistory(this.beatHistory, bassEnergy)
     this.pushHistory(this.energyHistory, totalEnergy)
@@ -539,9 +969,11 @@ export class WebAudioAnalysis {
       bassEnergy > beatBaseline * this.options.beatSensitivity &&
       currentTime - this.lastBeatEmission >= this.options.minBeatInterval
     ) {
-      const confidence = clamp(bassEnergy / (beatBaseline || 1), 1, 3)
+      const spectralComponent = onsetStrength > 0 ? clamp(onsetStrength, 1, 3.5) : 1
+      const energyComponent = clamp(bassEnergy / (beatBaseline || 1), 0.8, 3.6)
+      const confidence = clamp(energyComponent * 0.7 + spectralComponent * 0.3, 0.9, 4)
       this.lastBeatEmission = currentTime
-      this.emitBeat({ time: currentTime, confidence })
+      this.handleBeatDetection(currentTime, confidence)
     }
 
     if (
@@ -596,6 +1028,194 @@ export class WebAudioAnalysis {
     }
   }
 
+  private emitOnset(event: OnsetEvent): void {
+    for (const listener of this.onsetListeners) {
+      listener(event)
+    }
+  }
+
+  private emitGrid(event: GridEvent): void {
+    for (const listener of this.gridListeners) {
+      listener(event)
+    }
+  }
+
+  private handleBeatDetection(time: number, confidence: number): void {
+    this.beatTimes.push(time)
+    if (this.beatTimes.length > 96) {
+      this.beatTimes.shift()
+    }
+    if (this.beatGrid) {
+      this.beatGrid.lastBeatTime = time
+    }
+    this.updateBeatGrid(time, confidence)
+    if (this.comboState.combo >= 8) {
+      this.triggerPercussionPulse(time, confidence)
+    }
+    this.updateFeverOscillator()
+    this.emitBeat({ time, confidence })
+  }
+
+  private updateBeatGrid(time: number, confidence: number): void {
+    if (this.beatTimes.length < 4) return
+
+    const intervals: number[] = []
+    for (let i = 1; i < this.beatTimes.length; i += 1) {
+      const interval = this.beatTimes[i] - this.beatTimes[i - 1]
+      if (Number.isFinite(interval) && interval > 0.2 && interval < 2.5) {
+        intervals.push(interval)
+      }
+    }
+
+    if (intervals.length < 3) return
+
+    intervals.sort((a, b) => a - b)
+    const median = intervals[Math.floor(intervals.length / 2)]
+    const smoothing = clamp(this.options.gridSmoothing, 0.05, 0.95)
+    const previousInterval = this.beatGrid?.interval ?? median
+    const interval = clamp(previousInterval * (1 - smoothing) + median * smoothing, 0.2, 1.6)
+    const bpm = clamp(60 / Math.max(interval, 0.001), 60, 200)
+    const offset = this.computeGridOffset(interval)
+    this.beatGrid = { bpm, interval, offset, lastBeatTime: time }
+    this.emitGrid({ ...this.beatGrid, confidence })
+  }
+
+  private computeGridOffset(interval: number): number {
+    if (this.beatTimes.length === 0 || !Number.isFinite(interval) || interval <= 0) {
+      return this.startOffset
+    }
+    let accumulator = 0
+    let weight = 0
+    for (let i = 0; i < this.beatTimes.length; i += 1) {
+      const beatTime = this.beatTimes[i]
+      if (!Number.isFinite(beatTime)) continue
+      accumulator += beatTime - interval * i
+      weight += 1
+    }
+    if (weight <= 0) {
+      return this.startOffset
+    }
+    return accumulator / weight
+  }
+
+  private applyEqBands(preset: EqPreset): void {
+    if (!this.supported) return
+    this.prepareGraph()
+    if (!this.audioContext || !this.eqLow || !this.eqMid || !this.eqHigh) return
+    const now = this.audioContext.currentTime
+    const { bands } = preset
+    this.eqLow.gain.cancelScheduledValues(now)
+    this.eqLow.gain.setTargetAtTime(clamp(bands.low, -12, 12), now, 0.18)
+    this.eqMid.gain.cancelScheduledValues(now)
+    this.eqMid.gain.setTargetAtTime(clamp(bands.mid, -12, 12), now, 0.18)
+    this.eqHigh.gain.cancelScheduledValues(now)
+    this.eqHigh.gain.setTargetAtTime(clamp(bands.high, -12, 12), now, 0.18)
+  }
+
+  private getContextTimeForTrackTime(trackTime: number): number {
+    if (!this.audioContext) return trackTime
+    return this.startedAt + clamp(trackTime, 0, this.getDuration())
+  }
+
+  private computeQuantizedFrequency(multiplier = 1): number {
+    const grid = this.beatGrid
+    if (!grid) {
+      return 440 * Math.max(0.25, multiplier)
+    }
+    let base = 1 / Math.max(grid.interval, 0.001)
+    while (base < 110) base *= 2
+    while (base > 880) base /= 2
+    const target = Math.max(20, base * multiplier)
+    const midi = 69 + 12 * Math.log2(target / 440)
+    const quantizedMidi = Math.round(midi)
+    return 440 * 2 ** ((quantizedMidi - 69) / 12)
+  }
+
+  private ensureNoiseBuffer(): AudioBuffer | null {
+    if (this.noiseBuffer) return this.noiseBuffer
+    if (!this.audioContext) return null
+    const ctx = this.audioContext
+    const duration = 0.25
+    const frameCount = Math.max(1, Math.floor(ctx.sampleRate * duration))
+    const buffer = ctx.createBuffer(1, frameCount, ctx.sampleRate)
+    const channel = buffer.getChannelData(0)
+    for (let i = 0; i < frameCount; i += 1) {
+      const fade = 1 - i / frameCount
+      channel[i] = (Math.random() * 2 - 1) * fade
+    }
+    this.noiseBuffer = buffer
+    return buffer
+  }
+
+  private triggerPercussionPulse(trackTime: number, confidence: number): void {
+    if (!this.supported || !this.audioContext || !this.percussionLayerGain) return
+    const buffer = this.ensureNoiseBuffer()
+    if (!buffer) return
+    const ctx = this.audioContext
+    const startTime = this.getContextTimeForTrackTime(trackTime)
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.playbackRate.value = clamp(1.6 + confidence * 0.35, 1.2, 3.2)
+    const gain = ctx.createGain()
+    const peak = clamp(0.35 + Math.min(confidence, 3.5) * 0.12 + Math.min(this.comboState.combo, 64) / 180, 0, 1.1)
+    gain.gain.setValueAtTime(0, startTime)
+    gain.gain.linearRampToValueAtTime(peak, startTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.22)
+    source.connect(gain)
+    gain.connect(this.percussionLayerGain)
+    source.start(startTime)
+    source.stop(startTime + 0.3)
+  }
+
+  private ensureFeverOscillator(): void {
+    if (!this.supported || !this.audioContext) return
+    if (this.feverOscillator && this.feverOscGain) return
+    if (!this.feverLayerGain) return
+    const ctx = this.audioContext
+    const gain = ctx.createGain()
+    gain.gain.value = 0
+    gain.connect(this.feverLayerGain)
+    const oscillator = ctx.createOscillator()
+    oscillator.type = 'sawtooth'
+    oscillator.frequency.value = this.computeQuantizedFrequency(2)
+    oscillator.connect(gain)
+    oscillator.start()
+    this.feverOscillator = oscillator
+    this.feverOscGain = gain
+  }
+
+  private updateFeverOscillator(): void {
+    if (!this.supported || !this.audioContext) return
+    if (!this.comboState.feverActive) {
+      if (this.feverOscGain && this.audioContext) {
+        const now = this.audioContext.currentTime
+        this.feverOscGain.gain.cancelScheduledValues(now)
+        this.feverOscGain.gain.setTargetAtTime(0.0001, now, 0.3)
+      }
+      return
+    }
+
+    this.ensureFeverOscillator()
+    if (!this.audioContext || !this.feverOscillator || !this.feverOscGain) return
+    const ctx = this.audioContext
+    const now = ctx.currentTime
+    const targetFrequency = this.computeQuantizedFrequency(2.2 + this.comboState.feverLevel * 1.2)
+    this.feverOscillator.frequency.setTargetAtTime(targetFrequency, now, 0.18)
+    const targetGain = clamp(0.3 + this.comboState.feverLevel * 0.6, 0.2, 1.1)
+    this.feverOscGain.gain.cancelScheduledValues(now)
+    this.feverOscGain.gain.setTargetAtTime(targetGain, now, 0.25)
+  }
+
+  private getOrCreateSfxEngine(): ProceduralSfxEngine | null {
+    if (!this.supported) return null
+    this.prepareGraph()
+    if (!this.audioContext || !this.sfxGain) return null
+    if (!this.sfxEngine) {
+      this.sfxEngine = new ProceduralSfxEngine(this.audioContext, this.sfxGain, () => this.getBeatGrid())
+    }
+    return this.sfxEngine
+  }
+
   private emitEnergySpike(event: EnergySpikeEvent): void {
     for (const listener of this.energyListeners) {
       listener(event)
@@ -638,21 +1258,25 @@ export class WebAudioAnalysis {
     } catch {
       // ignore
     }
-    source.disconnect()
+    try {
+      source.disconnect()
+    } catch {
+      /* noop */
+    }
     this.stopAnalysisLoop()
   }
 
   private refreshOutputConnections(): void {
-    if (!this.supported || !this.audioContext || !this.gainNode) return
+    if (!this.supported || !this.audioContext || !this.masterGain) return
     try {
-      this.gainNode.disconnect()
+      this.masterGain.disconnect()
     } catch {
       // ignore disconnect errors
     }
-    this.gainNode.connect(this.audioContext.destination)
+    this.masterGain.connect(this.audioContext.destination)
     for (const output of this.externalOutputs) {
       try {
-        this.gainNode.connect(output)
+        this.masterGain.connect(output)
       } catch {
         // ignore connection errors
       }
@@ -750,6 +1374,32 @@ export class WebAudioAnalysis {
     }
 
     return clamp(bestBpm, 60, 180)
+  }
+
+  private extractPeaks(buffer: AudioBuffer, bucketCount = 128): number[] {
+    const channelCount = Math.max(1, buffer.numberOfChannels)
+    const frameCount = buffer.length
+    const samplesPerBucket = Math.max(1, Math.floor(frameCount / bucketCount))
+    const peaks: number[] = []
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const start = bucket * samplesPerBucket
+      if (start >= frameCount) break
+      const end = Math.min(frameCount, start + samplesPerBucket)
+      let peak = 0
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        const data = buffer.getChannelData(channel)
+        for (let i = start; i < end; i += 1) {
+          const value = Math.abs(data[i])
+          if (value > peak) peak = value
+        }
+      }
+      peaks.push(peak)
+    }
+    const max = peaks.reduce((acc, value) => Math.max(acc, value), 0)
+    if (max <= 0) {
+      return peaks.map(() => 0)
+    }
+    return peaks.map((value) => clamp(value / max, 0, 1))
   }
 
   private generateUploadId(): string {

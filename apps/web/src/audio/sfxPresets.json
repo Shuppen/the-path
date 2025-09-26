@@ -1,0 +1,50 @@
+{
+  "tap": {
+    "gain": 0.9,
+    "envelope": { "attack": 0.004, "decay": 0.12, "sustain": 0, "release": 0.1 },
+    "oscillators": [
+      { "type": "sine", "ratio": 2.0, "gain": 0.65 },
+      { "type": "triangle", "ratio": 3.01, "gain": 0.25, "detune": -8 }
+    ],
+    "noise": { "type": "white", "gain": 0.35, "decay": 0.12 },
+    "filter": { "type": "bandpass", "frequency": 2100, "Q": 1.2 }
+  },
+  "perfect": {
+    "gain": 1.1,
+    "envelope": { "attack": 0.002, "decay": 0.22, "sustain": 0.35, "release": 0.32 },
+    "oscillators": [
+      { "type": "sawtooth", "ratio": 4, "gain": 0.4 },
+      { "type": "square", "ratio": 8, "gain": 0.25 }
+    ],
+    "noise": { "type": "pink", "gain": 0.22, "decay": 0.28 },
+    "filter": { "type": "lowpass", "frequency": 3600, "Q": 0.9 }
+  },
+  "miss": {
+    "gain": 0.8,
+    "envelope": { "attack": 0.006, "decay": 0.18, "sustain": 0, "release": 0.4 },
+    "oscillators": [
+      { "type": "triangle", "ratio": 0.5, "gain": 0.5 }
+    ],
+    "noise": { "type": "pink", "gain": 0.4, "decay": 0.4 },
+    "filter": { "type": "lowpass", "frequency": 1200, "Q": 1.8 }
+  },
+  "fever-start": {
+    "gain": 1.2,
+    "envelope": { "attack": 0.01, "decay": 0.4, "sustain": 0.5, "release": 0.6 },
+    "oscillators": [
+      { "type": "sawtooth", "ratio": 2, "gain": 0.45 },
+      { "type": "sine", "ratio": 1, "gain": 0.25 }
+    ],
+    "noise": { "type": "white", "gain": 0.18, "decay": 0.3 },
+    "filter": { "type": "bandpass", "frequency": 1600, "Q": 0.7 }
+  },
+  "lane-shift": {
+    "gain": 0.6,
+    "envelope": { "attack": 0.003, "decay": 0.18, "sustain": 0, "release": 0.14 },
+    "oscillators": [
+      { "type": "square", "ratio": 1.5, "gain": 0.4 },
+      { "type": "triangle", "ratio": 0.75, "gain": 0.22 }
+    ],
+    "filter": { "type": "bandpass", "frequency": 900, "Q": 2 }
+  }
+}

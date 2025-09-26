@@ -16,6 +16,7 @@ import {
   type StoredRecentTrack,
 } from './audio/recentTracks'
 import { formatValidationErrorMessage, validateAudioDuration } from './audio/uploadValidation'
+import { readAudioSettings, sanitizeAudioSettings, type AudioSettings, writeAudioSettings } from './audio/preferences'
 import { getPrefersReducedMotion, setReducedMotionOverride } from './environment/reducedMotion'
 import {
   type ActiveUpgrade,
@@ -160,10 +161,25 @@ export function App() {
   const [activeUpgrades, setActiveUpgrades] = useState<ActiveUpgrade[]>([])
   const [worldMode, setWorldMode] = useState<WorldMode>('track')
   const [metaProgress, setMetaProgress] = useState<MetaProgressState>(() => readMetaProgress())
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => readAudioSettings())
 
   useEffect(() => {
     writeRecentTracks(recentTracks)
   }, [recentTracks])
+
+  useEffect(() => {
+    if (!audioSupported) return
+    const settings = audioSettings
+    audio.setMusicVolume(settings.music)
+    audio.setSfxVolume(settings.sfx)
+    audio.setVoiceVolume(settings.voice)
+    if (settings.eqPreset === 'custom' && settings.customEq) {
+      audio.setCustomEq(settings.customEq)
+    } else {
+      audio.setEqPreset(settings.eqPreset)
+    }
+    writeAudioSettings(settings)
+  }, [audio, audioSettings, audioSupported])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -195,6 +211,7 @@ export function App() {
   )
 
   const selectedTrack = useMemo(() => resolveTrackById(selectedTrackId), [resolveTrackById, selectedTrackId])
+  const eqPresets = useMemo(() => audio.listEqPresets(), [audio])
 
   useEffect(() => {
     if (!selectedTrack) {
@@ -241,6 +258,10 @@ export function App() {
     [selectedTrack],
   )
 
+  const handleAudioSettingsChange = useCallback((next: AudioSettings) => {
+    setAudioSettings(sanitizeAudioSettings(next))
+  }, [])
+
   const handleUploadFile = useCallback(
     async (file: File) => {
       if (!audioSupported) {
@@ -252,7 +273,7 @@ export function App() {
       setUploadError(null)
 
       try {
-        const { id, duration, bpm } = await audio.importFromBlob(file)
+        const { id, duration, bpm, peaks } = await audio.importFromBlob(file)
         const durationError = validateAudioDuration(duration)
         if (durationError) {
           audio.removeCustomTrack(id)
@@ -267,6 +288,7 @@ export function App() {
           duration,
           bpm: Math.round(bpm),
           description: describeUploadedTrack(duration, bpm),
+          peaks,
         }
 
         setUploadedTracks((previous) => {
@@ -281,6 +303,7 @@ export function App() {
           duration: manifest.duration,
           bpm: manifest.bpm,
           createdAt: Date.now(),
+          peaks,
         }
         setRecentTracks((previous) => upsertRecentTrack(previous, storedEntry, MAX_RECENT_TRACKS))
         setSelectedTrackId(manifest.id)
@@ -406,6 +429,10 @@ export function App() {
           onChangeReducedMotion={handleToggleReducedMotion}
           calibration={calibration}
           onChangeCalibration={handleChangeCalibration}
+          audio={audio}
+          audioSettings={audioSettings}
+          onChangeAudioSettings={handleAudioSettingsChange}
+          eqPresets={eqPresets}
           onBack={() => setScreen('home')}
         />
       ) : null}

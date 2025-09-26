@@ -20,9 +20,11 @@ import {
   type ActiveUpgrade,
   type WorldMode,
   type MetaProgressState,
+  type WorldAudioEvent,
 } from '../world'
 import PauseScreen from './Pause'
 import { padScore } from '../ui/scoreFormatting'
+import BeatDebugOverlay from '../ui/BeatDebugOverlay'
 
 interface GameScreenProps {
   track: AudioTrackManifestEntry
@@ -60,6 +62,12 @@ const initialHudState: HudState = {
   progress: null,
 }
 
+const clamp = (value: number, min: number, max: number): number => {
+  if (value < min) return min
+  if (value > max) return max
+  return value
+}
+
 export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, meta, onComplete, onExit }: GameScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const loopRef = useRef<LoopController | null>(null)
@@ -89,6 +97,40 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
       health: world.state.runner.health,
     }))
   }, [])
+
+  const handleWorldAudioEvents = useCallback(
+    (events: WorldAudioEvent[]) => {
+      if (!events.length) return
+      for (const event of events) {
+        switch (event.type) {
+          case 'hit': {
+            const intensity = clamp(event.combo / 24 + (event.judgement === 'perfect' ? 1 : 0.75), 0.5, 2)
+            const preset = event.judgement === 'perfect' ? 'perfect' : 'tap'
+            audio.playSfx(preset, { intensity })
+            break
+          }
+          case 'miss': {
+            audio.playSfx('miss', { intensity: 1 })
+            audio.triggerMissDucking()
+            break
+          }
+          case 'lane-shift': {
+            audio.playSfx('lane-shift', { intensity: 0.65 })
+            break
+          }
+          case 'fever': {
+            if (event.state === 'start') {
+              audio.playSfx('fever-start', { intensity: 1.1 })
+            }
+            break
+          }
+          default:
+            break
+        }
+      }
+    },
+    [audio],
+  )
 
   const teardown = useCallback(() => {
     loopRef.current?.stop()
@@ -185,6 +227,15 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
           if (!world) return
           const frame = input.consumeFrame()
           world.update({ frame, dt })
+          const events = world.consumeAudioEvents()
+          if (events.length) {
+            handleWorldAudioEvents(events)
+          }
+          audio.updatePerformanceState({
+            combo: world.state.runner.combo,
+            feverActive: world.state.runner.feverActive,
+            feverLevel: world.state.runner.feverMeter,
+          })
           updateHudFromWorld(world)
         },
         render: () => {
@@ -209,7 +260,18 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
       window.removeEventListener('orientationchange', resizeHandler)
       teardown()
     }
-  }, [audio, calibration, meta, mode, sessionSeed, teardown, updateHudFromWorld, updateMetrics, upgrades])
+  }, [
+    audio,
+    calibration,
+    meta,
+    mode,
+    sessionSeed,
+    teardown,
+    updateHudFromWorld,
+    updateMetrics,
+    upgrades,
+    handleWorldAudioEvents,
+  ])
 
   useEffect(() => {
     if (!worldRef.current) return
@@ -226,7 +288,9 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
     if (!world) return undefined
 
     const detachBeat = audio.onBeat(({ time, confidence }) => {
-      world.syncToBeat(time, confidence)
+      const calibrationOffset = (world.state.calibration.audioOffsetMs ?? 0) / 1000
+      const quantized = audio.quantizeTime(time + calibrationOffset, 4)
+      world.syncToBeat(time, confidence, quantized.target)
     })
     const detachEnergy = audio.onEnergySpike(({ intensity }) => {
       world.applyEnergySpike(intensity)
@@ -341,6 +405,7 @@ export function GameScreen({ track, audio, dprCap, calibration, upgrades, mode, 
       <div className="flex-1 px-6 py-4">
         <div className="relative mx-auto aspect-[9/16] w-full max-w-md overflow-hidden rounded-[2.5rem] border border-slate-700/60 bg-slate-900">
           <canvas ref={canvasRef} className="h-full w-full" role="presentation" style={{ touchAction: 'none' }} />
+          {import.meta.env.DEV ? <BeatDebugOverlay audio={audio} canvasRef={canvasRef} /> : null}
           {paused ? (
             <PauseScreen
               onResume={handlePauseToggle}

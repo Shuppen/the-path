@@ -41,6 +41,7 @@ import {
   type StageMetrics,
   type UpgradeCard,
   type WorldMode,
+  type WorldAudioEvent,
   type WorldSnapshot,
   type WorldState,
   type WorldStatus,
@@ -229,6 +230,7 @@ export class World {
   private sessionBestScore = 0
   private personalBest: PersonalBestRecord
   private pendingReset = false
+  private audioEvents: WorldAudioEvent[] = []
 
   constructor(config: WorldConfig) {
     this.baseSeed = config.seed
@@ -253,8 +255,8 @@ export class World {
     this.externalClock = clock
   }
 
-  syncToBeat(time: number, confidence = 1): void {
-    this.generator.syncToExternalBeat(time, confidence)
+  syncToBeat(time: number, confidence = 1, quantizedTime?: number): void {
+    this.generator.syncToExternalBeat(time, confidence, this.state, quantizedTime)
   }
 
   applyEnergySpike(intensity: number): void {
@@ -263,6 +265,15 @@ export class World {
 
   applyBreak(duration: number): void {
     this.generator.applyBreak(duration)
+  }
+
+  consumeAudioEvents(): WorldAudioEvent[] {
+    if (this.audioEvents.length === 0) {
+      return []
+    }
+    const events = [...this.audioEvents]
+    this.audioEvents.length = 0
+    return events
   }
 
   setViewport(width: number, height: number): void {
@@ -296,6 +307,7 @@ export class World {
       this.state.meta,
     )
     this.state.seed = seed
+    this.audioEvents.length = 0
   }
 
   snapshot(): WorldSnapshot {
@@ -384,12 +396,15 @@ export class World {
     }
   }
 
-  private handleMiss(noteLane: LaneIndex): void {
+  private handleMiss(noteLane: LaneIndex, eventTime: number = this.state.time): void {
     const runner = this.state.runner
     runner.combo = 0
     runner.comboMultiplier = 1
     runner.perfectStreak = 0
     runner.missHits += 1
+    if (runner.feverActive) {
+      this.audioEvents.push({ type: 'fever', state: 'end', time: eventTime })
+    }
     runner.feverActive = false
     runner.feverTimer = 0
     runner.feverMeter = 0
@@ -398,6 +413,7 @@ export class World {
     this.applyDamage(OBSTACLE_DAMAGE)
     this.addFeedback('miss', noteLane)
     this.updateAccuracy()
+    this.audioEvents.push({ type: 'miss', lane: noteLane, time: eventTime })
   }
 
   private triggerDamageImpulse(): void {
@@ -475,6 +491,7 @@ export class World {
         }
       }
     }
+    this.audioEvents.push({ type: 'fever', state: 'start', time: this.state.time })
   }
 
   private applyJudgement(note: LaneNote, judgement: Judgement, hitTime: number): void {
@@ -484,7 +501,7 @@ export class World {
 
     const runner = this.state.runner
     if (judgement === 'miss') {
-      this.handleMiss(note.lane)
+      this.handleMiss(note.lane, hitTime)
       return
     }
 
@@ -510,6 +527,13 @@ export class World {
     runner.damageBonus = 0
     this.addFeedback(judgement, note.lane)
     this.updateAccuracy()
+    this.audioEvents.push({
+      type: 'hit',
+      judgement,
+      lane: note.lane,
+      time: hitTime,
+      combo: runner.combo,
+    })
   }
 
   private judgeLane(lane: LaneIndex, currentTime: number): Judgement | null {
@@ -589,6 +613,15 @@ export class World {
       target = clampLane(target + 1)
     }
 
+    if (target !== runner.targetLane) {
+      this.audioEvents.push({
+        type: 'lane-shift',
+        direction: direction > 0 ? 'right' : 'left',
+        lane: runner.lane,
+        time: this.state.time,
+      })
+    }
+
     this.beginLaneTransition(target)
   }
 
@@ -645,7 +678,7 @@ export class World {
       if (obstacle.lane !== runnerLane) continue
       if (Math.abs(currentTime - obstacle.time) <= GOOD_WINDOW) {
         obstacle.resolved = true
-        this.handleMiss(obstacle.lane)
+        this.handleMiss(obstacle.lane, currentTime)
       }
     }
   }
@@ -665,6 +698,7 @@ export class World {
       runner.feverMeter = 0.4
       this.state.feverMeter = runner.feverMeter
       this.state.comboMultiplier = computeMultiplier(runner.combo)
+      this.audioEvents.push({ type: 'fever', state: 'end', time: this.state.time })
       return
     }
 
