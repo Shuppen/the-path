@@ -1,7 +1,5 @@
 import type { RemoteConfig } from '../services/remoteConfig'
 
-import type { RemoteConfig } from '../services/remoteConfig'
-
 export type ChallengeKind = 'daily' | 'weekly'
 
 export interface LeaderboardEntry {

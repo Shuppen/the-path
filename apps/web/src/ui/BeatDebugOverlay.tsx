@@ -3,7 +3,7 @@ import type { WebAudioAnalysis, BeatEvent, OnsetEvent, BeatGridState } from '../
 
 interface BeatDebugOverlayProps {
   audio: WebAudioAnalysis
-  canvasRef: React.RefObject<HTMLCanvasElement>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>
 }
 
 const MAX_HISTORY = 64

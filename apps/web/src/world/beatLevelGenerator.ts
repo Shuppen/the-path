@@ -123,7 +123,7 @@ export class BeatLevelGenerator {
       resolved: false,
     }
     world.obstacles.push(obstacle)
-    this.obstacleCooldown = this.prng.nextInt(2, 5)
+    this.obstacleCooldown = 2 + this.prng.nextInt(4)
   }
 
   private relaxTempo(currentTime: number): void {
